@@ -21,25 +21,30 @@ BUILD_TIMEOUT = 180  # seconds
 
 
 def _check_and_clear_workspace_lock() -> str | None:
-    """Check workspace lock. Clear if stale. Returns error message or None."""
+    """Check workspace lock. Clear if stale. Returns error message or None.
+
+    Our temp workspace (/tmp/stm32-mcp-workspace) is never used by CubeIDE GUI,
+    so we only need to check if another MCP headless build is using it — not
+    whether CubeIDE is running in general (it uses its own workspace).
+    """
     if not os.path.isfile(WORKSPACE_LOCK):
         return None
 
-    # Check if CubeIDE GUI is actually running
+    # Check if another headless build is using OUR temp workspace specifically
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "stm32cubeide"],
+            ["pgrep", "-f", f"stm32-mcp-workspace"],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0 and result.stdout.strip():
             return (
-                "CubeIDE workspace is locked and CubeIDE appears to be running. "
-                "Close CubeIDE or wait for it to finish."
+                "Another MCP headless build is already running. "
+                "Wait for it to finish."
             )
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
-    # No CubeIDE process — stale lock, remove it
+    # No process using our workspace — stale lock, remove it
     try:
         os.remove(WORKSPACE_LOCK)
     except OSError:

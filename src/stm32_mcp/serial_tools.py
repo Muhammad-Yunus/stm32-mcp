@@ -9,7 +9,7 @@ import serial.tools.list_ports
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
-# Connection pool: connection_id -> serial.Serial
+# Connection pool: port path -> serial.Serial
 _connections: dict[str, serial.Serial] = {}
 
 # ST-Link VCP identifiers
@@ -21,6 +21,7 @@ INTER_BYTE_SLEEP = 0.050   # 50ms between read attempts
 SILENCE_BREAK = 0.200      # 200ms silence after first data = response complete
 DEFAULT_TIMEOUT = 2.0
 DEFAULT_MAX_BYTES = 4096
+
 
 LINE_ENDINGS = {
     "lf": "\n",
@@ -92,16 +93,14 @@ def _do_list_ports() -> str:
 
 
 def _do_connect(port: str, baudrate: int) -> str:
-    """Open serial connection."""
-    conn_id = f"{port}@{baudrate}"
-
+    """Open serial connection. Pool is keyed by port path only."""
     # Already connected?
-    if conn_id in _connections:
-        existing = _connections[conn_id]
+    if port in _connections:
+        existing = _connections[port]
         if existing.is_open:
-            return f"Already connected: {conn_id}"
+            return f"Already connected: {port} @ {baudrate}"
         # Stale entry — clean up
-        del _connections[conn_id]
+        del _connections[port]
 
     try:
         ser = serial.Serial(
@@ -115,8 +114,8 @@ def _do_connect(port: str, baudrate: int) -> str:
     except serial.SerialException as e:
         return f"ERROR: Could not open {port}: {e}"
 
-    _connections[conn_id] = ser
-    return f"Connected: {conn_id}"
+    _connections[port] = ser
+    return f"Connected: {port} @ {baudrate}"
 
 
 def _do_send(
@@ -216,7 +215,8 @@ async def serial_connect(port: str, baudrate: int = 115200) -> str:
         baudrate: Baud rate (default 115200).
 
     Returns:
-        Connection ID (use this in subsequent serial_send/read/disconnect calls).
+        Connection status message. The connection_id for subsequent calls is the port path
+        (e.g., "/dev/cu.usbmodem1234") — the same value you passed as the port argument.
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_executor, lambda: _do_connect(port, baudrate))
