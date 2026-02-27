@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 stm32-mcp = "stm32_mcp.server:main"
+stm32-serial = "stm32_mcp.serial_client:main"
 
 [build-system]
 requires = ["hatchling"]

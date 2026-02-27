@@ -5,6 +5,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from .board_map import stm32_list_probes, stm32_set_nickname
+from .serial_bridge import start_bridge
 from .build import stm32_build, stm32_build_and_flash
 from .debug_tools import stm32_read_memory, stm32_write_memory
 from .flash import stm32_board_info, stm32_flash
@@ -92,6 +93,7 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    start_bridge()  # daemon thread — TCP bridge on localhost:8765
     mcp.run()
 
 
