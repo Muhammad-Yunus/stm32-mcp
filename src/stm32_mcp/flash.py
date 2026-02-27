@@ -1,4 +1,4 @@
-"""Flash tools — STM32_Programmer_CLI wrapper."""
+"""Flash tools — OpenOCD wrapper for SWD operations."""
 
 import asyncio
 import os
@@ -6,7 +6,8 @@ import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
-from .toolchain import find_programmer_cli
+from .board_map import resolve_probe_full
+from .toolchain import run_openocd
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -14,63 +15,70 @@ FLASH_TIMEOUT = 30  # seconds
 INFO_TIMEOUT = 10   # seconds
 
 
-def _do_flash(elf_path: str, reset: bool = True, verify: bool = True) -> str:
-    """Synchronous flash — runs in executor thread."""
-    cli = find_programmer_cli()
-    if not cli:
-        return "ERROR: STM32_Programmer_CLI not found. Install CubeIDE or CubeCLT."
+def _do_flash(
+    elf_path: str,
+    reset: bool = True,
+    verify: bool = True,
+    sn: str = "",
+    target_cfg: str = "",
+    chipid: int = 0,
+) -> str:
+    """Synchronous flash via OpenOCD — runs in executor thread."""
+    if not sn or not target_cfg:
+        return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
 
     if not os.path.isfile(elf_path):
         return f"ERROR: File not found: {elf_path}"
 
-    cmd = [cli, "-c", "port=SWD", "-w", elf_path]
+    # Build OpenOCD program command
+    # "program <file> [verify] [reset] exit"
+    prog_parts = [f"program {{{elf_path}}}"]
     if verify:
-        cmd.append("-v")
+        prog_parts.append("verify")
     if reset:
-        cmd.append("-hardRst")
+        prog_parts.append("reset")
+    prog_parts.append("exit")
+    prog_cmd = " ".join(prog_parts)
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=FLASH_TIMEOUT
-        )
+        output = run_openocd(sn, target_cfg, [prog_cmd], timeout=FLASH_TIMEOUT, chipid=chipid)
     except subprocess.TimeoutExpired:
         return f"ERROR: Flash timed out after {FLASH_TIMEOUT}s."
-
-    output = result.stdout + "\n" + result.stderr
+    except FileNotFoundError as e:
+        return f"ERROR: {e}"
 
     # Parse for common errors
-    if "No STM32 target found" in output or "No ST-LINK detected" in output:
+    if "no device found" in output.lower() or "unable to find" in output.lower():
         return "ERROR: No ST-Link detected. Check USB connection and board power."
 
-    if "read out protection" in output.lower() or "RDP level" in output:
+    if "read protection" in output.lower():
         return (
-            "ERROR: Chip is read-protected. To mass erase and unlock:\n"
-            f"  {cli} -c port=SWD -ob RDP=0xAA\n"
+            "ERROR: Chip is read-protected. Mass erase needed to unlock.\n"
             "WARNING: This erases all flash contents."
         )
 
     # Extract key info
     parts = []
 
-    # ST-LINK info
-    stlink_match = re.search(r"ST-LINK\s+(SN|serial)\s*:\s*(\S+)", output, re.IGNORECASE)
+    # ST-LINK info from OpenOCD connect output
+    stlink_match = re.search(r'serial:\s+([0-9A-Fa-f]+)', output)
     if stlink_match:
-        parts.append(f"ST-LINK: {stlink_match.group(2)}")
+        parts.append(f"ST-LINK: {stlink_match.group(1)}")
 
-    # Download result
-    if "File download complete" in output or "download verified successfully" in output.lower():
+    # Flash result
+    if "** Programming Finished **" in output:
         parts.append("Flash: OK")
-    elif result.returncode != 0:
+    elif "Error" in output or "error" in output.lower():
         parts.append("Flash: FAILED")
 
     # Verify result
     if verify:
-        if "verified successfully" in output.lower():
+        if "** Verified OK **" in output:
             parts.append("Verify: OK")
-        elif "verification failed" in output.lower():
+        elif "** Verify Failed **" in output:
             parts.append("Verify: FAILED")
 
-    if reset and "MCU Reset" in output:
+    if reset:
         parts.append("Reset: OK")
 
     # If we couldn't parse anything useful, return raw output
@@ -79,49 +87,70 @@ def _do_flash(elf_path: str, reset: bool = True, verify: bool = True) -> str:
 
     # Add any error lines from output
     for line in output.splitlines():
-        if "error" in line.lower() and "error:" not in "\n".join(parts).lower():
-            parts.append(f"  {line.strip()}")
+        stripped = line.strip()
+        if "error" in stripped.lower() and "error:" not in "\n".join(parts).lower():
+            if stripped and not stripped.startswith("Open On-Chip"):
+                parts.append(f"  {stripped}")
 
     return "\n".join(parts)
 
 
-def _do_board_info() -> str:
-    """Synchronous board info — runs in executor thread."""
-    cli = find_programmer_cli()
-    if not cli:
-        return "ERROR: STM32_Programmer_CLI not found. Install CubeIDE or CubeCLT."
-
-    cmd = [cli, "-c", "port=SWD", "mode=NORMAL", "-rdu"]
+def _do_board_info(sn: str = "", target_cfg: str = "", chipid: int = 0) -> str:
+    """Synchronous board info via OpenOCD — runs in executor thread."""
+    if not sn or not target_cfg:
+        return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=INFO_TIMEOUT
-        )
+        output = run_openocd(sn, target_cfg, ["init"], timeout=INFO_TIMEOUT, chipid=chipid)
     except subprocess.TimeoutExpired:
         return f"ERROR: Board info timed out after {INFO_TIMEOUT}s."
+    except FileNotFoundError as e:
+        return f"ERROR: {e}"
 
-    output = result.stdout + "\n" + result.stderr
-
-    if "No STM32 target found" in output or "No ST-LINK detected" in output:
+    if "no device found" in output.lower() or "unable to find" in output.lower():
         return "ERROR: No ST-Link detected. Check USB connection and board power."
 
-    # Extract useful fields
+    # Extract useful fields from OpenOCD connect output
     info = []
 
-    patterns = [
-        (r"ST-LINK\s+SN\s*:\s*(\S+)", "ST-LINK SN"),
-        (r"ST-LINK\s+FW\s*:\s*(.+)", "ST-LINK FW"),
-        (r"Voltage\s*:\s*(.+)", "Voltage"),
-        (r"Device\s+ID\s*:\s*(0x\S+)", "Device ID"),
-        (r"Device\s+name\s*:\s*(.+)", "Device name"),
-        (r"Flash\s+size\s*:\s*(.+)", "Flash size"),
-        (r"Read Out Protection\s*:\s*(.+)", "RDP"),
-    ]
+    # ST-LINK version: "STLINK V3J16M8"
+    stlink_ver = re.search(r'STLINK\s+(V\S+)', output)
+    if stlink_ver:
+        info.append(f"ST-LINK FW: {stlink_ver.group(1)}")
 
-    for pattern, label in patterns:
-        match = re.search(pattern, output, re.IGNORECASE)
-        if match:
-            info.append(f"{label}: {match.group(1).strip()}")
+    # Serial
+    sn_match = re.search(r'serial:\s+([0-9A-Fa-f]+)', output)
+    if sn_match:
+        info.append(f"ST-LINK SN: {sn_match.group(1)}")
+
+    # Target voltage: "Target voltage: 3.288"
+    voltage = re.search(r'Target voltage:\s+([\d.]+)', output)
+    if voltage:
+        info.append(f"Voltage: {voltage.group(1)}V")
+
+    # CPU type: "cortex_m4" or "Cortex-M4"
+    cpu = re.search(r'(Cortex-M\d\+?|cortex_m\d\+?)', output, re.IGNORECASE)
+    if cpu:
+        info.append(f"CPU: {cpu.group(1)}")
+
+    # Flash size from OpenOCD: "flash size = 512kb"
+    flash_size = re.search(r'flash\s+size\s*=\s*(\d+\s*[kKmM]?[bB]?)', output)
+    if flash_size:
+        info.append(f"Flash: {flash_size.group(1)}")
+
+    # Chip ID
+    chip_match = re.search(r'chip\s+id.*?(0x[0-9a-fA-F]+)', output, re.IGNORECASE)
+    if chip_match:
+        info.append(f"Chip ID: {chip_match.group(1)}")
+
+    # Add board/probe nicknames
+    from .board_map import get_board_nickname_for_probe_sn, get_probe_nickname, _probe_cache
+    probe_nick = get_probe_nickname(sn)
+    board_nick = get_board_nickname_for_probe_sn(sn)
+    if board_nick:
+        info.append(f'Board: "{board_nick}"')
+    if probe_nick:
+        info.append(f'Probe: "{probe_nick}"')
 
     if info:
         return "\n".join(info)
@@ -130,39 +159,54 @@ def _do_board_info() -> str:
     return output.strip()
 
 
-async def stm32_flash(elf_path: str, reset: bool = True, verify: bool = True) -> str:
+async def stm32_flash(
+    elf_path: str,
+    reset: bool = True,
+    verify: bool = True,
+    probe: str = "",
+) -> str:
     """Flash firmware to STM32 board via ST-Link.
 
     Writes the specified .elf (or .bin/.hex) file to the connected STM32's
-    flash memory using STM32_Programmer_CLI over SWD.
+    flash memory using OpenOCD over SWD.
 
     Args:
         elf_path: Absolute path to the firmware file (.elf, .bin, or .hex).
         reset: If true, hard-reset the board after flashing.
         verify: If true, verify flash contents match the file.
+        probe: Board nickname, probe nickname, or ST-Link SN to target a specific board.
 
     Returns:
         Flash result — ST-LINK info, download status, verify result.
     """
+    sn, target_cfg, chipid = resolve_probe_full(probe)
     loop = asyncio.get_event_loop()
     return await asyncio.wait_for(
-        loop.run_in_executor(_executor, lambda: _do_flash(elf_path, reset, verify)),
+        loop.run_in_executor(
+            _executor, lambda: _do_flash(elf_path, reset, verify, sn, target_cfg, chipid)
+        ),
         timeout=FLASH_TIMEOUT + 10,
     )
 
 
-async def stm32_board_info() -> str:
+async def stm32_board_info(probe: str = "") -> str:
     """Read board information via ST-Link.
 
     Connects to the STM32 via SWD and reads device info: ST-LINK version,
-    device ID/name, flash size, voltage, and read-out protection level.
-    Useful for verifying the ST-Link connection before building/flashing.
+    voltage, CPU type, and flash size. Useful for verifying the ST-Link
+    connection before building/flashing.
+
+    Args:
+        probe: Board nickname, probe nickname, or ST-Link SN to target a specific board.
 
     Returns:
-        Board info — ST-LINK serial, firmware version, device ID, flash size, voltage, RDP level.
+        Board info — ST-LINK firmware, serial, voltage, CPU, flash size.
     """
+    sn, target_cfg, chipid = resolve_probe_full(probe)
     loop = asyncio.get_event_loop()
     return await asyncio.wait_for(
-        loop.run_in_executor(_executor, _do_board_info),
+        loop.run_in_executor(
+            _executor, lambda: _do_board_info(sn, target_cfg, chipid)
+        ),
         timeout=INFO_TIMEOUT + 10,
     )

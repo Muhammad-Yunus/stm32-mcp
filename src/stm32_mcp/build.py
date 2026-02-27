@@ -260,6 +260,7 @@ async def stm32_build_and_flash(
     clean: bool = False,
     reset: bool = True,
     verify: bool = True,
+    probe: str = "",
 ) -> str:
     """Build firmware and flash it to the board in one step.
 
@@ -273,6 +274,7 @@ async def stm32_build_and_flash(
         clean: If true, clean before building.
         reset: If true, reset the board after flashing.
         verify: If true, verify flash contents after writing.
+        probe: Board nickname, probe nickname, or ST-Link SN to target a specific board.
 
     Returns:
         Combined build and flash results.
@@ -312,7 +314,7 @@ async def stm32_build_and_flash(
 
     parts.append("")
     parts.append("--- FLASHING ---")
-    flash_output = await stm32_flash(elf_path, reset=reset, verify=verify)
+    flash_output = await stm32_flash(elf_path, reset=reset, verify=verify, probe=probe)
     parts.append(flash_output)
 
     return "\n".join(parts)

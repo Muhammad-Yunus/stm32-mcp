@@ -4,7 +4,9 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+from .board_map import stm32_list_probes, stm32_set_nickname
 from .build import stm32_build, stm32_build_and_flash
+from .debug_tools import stm32_read_memory, stm32_write_memory
 from .flash import stm32_board_info, stm32_flash
 from .serial_tools import (
     serial_connect,
@@ -23,11 +25,15 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - stm32_flash          — Flash .elf/.bin/.hex to board via ST-Link SWD
 - stm32_build_and_flash — Build + flash in one step (use this most of the time)
 - stm32_board_info     — Read ST-Link and MCU info (device ID, flash size, voltage)
+- stm32_list_probes    — Show all connected boards with nicknames and MCU IDs
+- stm32_set_nickname   — Name a board (by MCU UID) or probe (by ST-Link SN)
 - serial_list_ports    — List serial ports (marks ST-Link VCP ports)
 - serial_connect       — Open a serial connection
 - serial_send          — Send data and read response
 - serial_read          — Read buffered serial data
 - serial_disconnect    — Close a serial connection
+- stm32_read_memory    — Read memory by address or variable name (from ELF symbols)
+- stm32_write_memory   — Write memory by address or variable name
 
 ## Typical Workflow
 
@@ -45,20 +51,40 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - Always build before flashing
 - Always verify behavior over serial after flashing
 - Serial default: 115200 baud, LF line endings
+
+## Multi-Board Setup
+
+- stm32_list_probes    — Show all connected boards with nicknames and MCU IDs
+- stm32_set_nickname   — Name a board (by MCU UID) or probe (by ST-Link SN)
+- Use the probe parameter on stm32_flash, stm32_build_and_flash, and
+  stm32_board_info to target by board nickname, probe nickname, or ST-Link SN
+- Board nicknames follow the MCU — probe swaps don't affect them
+- Probe nicknames follow the ST-Link — label your probes physically
+
+## Debug Tools
+
+- stm32_read_memory   — Read memory by address or variable name (from ELF symbols)
+- stm32_write_memory  — Write memory by address or variable name
+- Use symbol param with elf_path to read/write by name instead of hex address
+- Width auto-detected from ELF symbol size when using symbol names
 """
 
 mcp = FastMCP("stm32-mcp", instructions=INSTRUCTIONS)
 
-# Register all 9 tools
+# Register all 13 tools
 mcp.tool()(stm32_build)
 mcp.tool()(stm32_build_and_flash)
 mcp.tool()(stm32_flash)
 mcp.tool()(stm32_board_info)
+mcp.tool()(stm32_list_probes)
+mcp.tool()(stm32_set_nickname)
 mcp.tool()(serial_list_ports)
 mcp.tool()(serial_connect)
 mcp.tool()(serial_send)
 mcp.tool()(serial_read)
 mcp.tool()(serial_disconnect)
+mcp.tool()(stm32_read_memory)
+mcp.tool()(stm32_write_memory)
 
 
 def main():

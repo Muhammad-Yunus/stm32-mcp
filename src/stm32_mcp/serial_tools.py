@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 import serial
 import serial.tools.list_ports
 
+from .board_map import get_board_nickname_for_probe_sn, get_probe_nickname
+
 _executor = ThreadPoolExecutor(max_workers=4)
 
 # Connection pool: port path -> serial.Serial
@@ -74,7 +76,23 @@ def _do_list_ports() -> str:
     lines = []
     for port in ports:
         is_stlink = port.vid == ST_VID if port.vid else False
-        marker = " [ST-Link VCP]" if is_stlink else ""
+
+        if is_stlink:
+            # Enrich with nicknames
+            nick_parts = []
+            if port.serial_number:
+                probe_nick = get_probe_nickname(port.serial_number)
+                board_nick = get_board_nickname_for_probe_sn(port.serial_number)
+                if board_nick:
+                    nick_parts.append(f'"{board_nick}"')
+                if probe_nick:
+                    nick_parts.append(f'via "{probe_nick}"')
+            if nick_parts:
+                marker = f" [ST-Link VCP \u2014 {' '.join(nick_parts)}]"
+            else:
+                marker = " [ST-Link VCP]"
+        else:
+            marker = ""
 
         line = f"{port.device}{marker}"
         details = []
