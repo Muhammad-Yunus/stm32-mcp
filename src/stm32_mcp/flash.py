@@ -24,6 +24,8 @@ def _do_flash(
     chipid: int = 0,
 ) -> str:
     """Synchronous flash via OpenOCD — runs in executor thread."""
+    if chipid == -1:
+        return "ERROR: Probe connected but no target MCU detected. Check board power and SWD connection."
     if not sn or not target_cfg:
         return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
 
@@ -97,6 +99,8 @@ def _do_flash(
 
 def _do_board_info(sn: str = "", target_cfg: str = "", chipid: int = 0) -> str:
     """Synchronous board info via OpenOCD — runs in executor thread."""
+    if chipid == -1:
+        return "ERROR: Probe connected but no target MCU detected. Check board power and SWD connection."
     if not sn or not target_cfg:
         return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
 

@@ -1,4 +1,4 @@
-"""Build tools — CubeIDE headless build, ELF discovery, output filtering."""
+"""Build tools — CubeIDE headless build, ELF discovery, output summarization."""
 
 import asyncio
 import glob
@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from .toolchain import find_cubeide, get_project_name, validate_project_path
 
@@ -52,16 +53,11 @@ def _check_and_clear_workspace_lock() -> str | None:
     return None
 
 
-# Build output filter patterns
-_KEEP_PATTERNS = [
-    re.compile(r"arm-none-eabi"),
-    re.compile(r":\d+:\d+:\s*(error|warning|note):"),
-    re.compile(r"^make\["),
-    re.compile(r"\.elf\b"),
-    re.compile(r"^\s*(text|data|bss)\s"),
-    re.compile(r"^\s*\d+\s+\d+\s+\d+"),  # size table data rows
-    re.compile(r"Build Finished", re.IGNORECASE),
-    re.compile(r"Build Failed", re.IGNORECASE),
+LOG_DIR = "/tmp/stm32-mcp-logs"
+
+# Patterns for diagnostics and linker errors
+_DIAGNOSTIC_RE = re.compile(r":\d+:\d+:\s*(error|warning|note):")
+_LINKER_ERROR_PATTERNS = [
     re.compile(r"undefined reference"),
     re.compile(r"ld returned"),
     re.compile(r"multiple definition"),
@@ -70,30 +66,89 @@ _KEEP_PATTERNS = [
 ]
 
 
-def _filter_build_output(raw: str) -> str:
-    """Strip JVM/Eclipse noise from build output. Keep compiler lines."""
+def _save_build_log(raw: str, project_name: str) -> str:
+    """Save full build output to a log file. Returns the file path."""
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(LOG_DIR, f"{project_name}_{timestamp}.log")
+    with open(path, "w") as f:
+        f.write(raw)
+    return path
+
+
+def _summarize_build(raw: str, project_name: str) -> dict:
+    """Parse raw build output into a compact summary dict.
+
+    Returns dict with keys: summary (str), log_path (str),
+    error_count (int), warning_count (int).
+    """
+    log_path = _save_build_log(raw, project_name)
     lines = raw.splitlines()
 
-    # Find the first line that looks like actual build output
-    start_idx = 0
+    # Collect diagnostics (error/warning lines from compiler)
+    errors = []
+    warnings = []
+    linker_errors = []
+    for line in lines:
+        if _DIAGNOSTIC_RE.search(line):
+            if ": error:" in line:
+                errors.append(line.strip())
+            elif ": warning:" in line:
+                warnings.append(line.strip())
+        else:
+            for pat in _LINKER_ERROR_PATTERNS:
+                if pat.search(line):
+                    linker_errors.append(line.strip())
+                    break
+
+    # Parse size table: "  16384    512   2048  18944   4A00 Pebbles.elf"
+    size_line = None
     for i, line in enumerate(lines):
-        if "arm-none-eabi" in line or re.search(r":\d+:\d+:\s*(error|warning):", line):
-            start_idx = i
+        if re.match(r"\s*text\s+data\s+bss\s+dec\s+hex", line):
+            # Next non-empty line is the data row
+            for j in range(i + 1, min(i + 3, len(lines))):
+                m = re.match(r"\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", lines[j])
+                if m:
+                    size_line = f"{m.group(1)} text, {m.group(2)} data, {m.group(3)} bss"
+                    break
             break
 
-    # Filter from that point
-    kept = []
-    for line in lines[start_idx:]:
-        for pattern in _KEEP_PATTERNS:
-            if pattern.search(line):
-                kept.append(line)
-                break
+    # Parse build time from "Build Finished. 0 errors, 0 warnings. (took 4s.876ms)"
+    time_str = ""
+    time_match = re.search(r"\(took\s+([^)]+)\)", raw)
+    if time_match:
+        time_str = f", {time_match.group(1)}"
 
-    if kept:
-        return "\n".join(kept)
+    # Build the summary
+    parts = []
 
-    # Fallback: last 30 lines if nothing passed filter
-    return "\n".join(lines[-30:]) if lines else raw
+    error_count = len(errors) + len(linker_errors)
+    warning_count = len(warnings)
+
+    if error_count == 0:
+        parts.append(f"Build: OK ({error_count} errors, {warning_count} warnings{time_str})")
+    else:
+        parts.append(f"Build: FAILED ({error_count} errors, {warning_count} warnings{time_str})")
+
+    # Show warnings on success, errors+warnings on failure
+    for line in errors + linker_errors:
+        parts.append(f"  {line}")
+    for line in warnings:
+        parts.append(f"  {line}")
+
+    if size_line:
+        parts.append(f"Size: {size_line}")
+
+    # Include log path on failure so the LLM can dig in if needed
+    if error_count > 0:
+        parts.append(f"Full log: {log_path}")
+
+    return {
+        "summary": "\n".join(parts),
+        "log_path": log_path,
+        "error_count": error_count,
+        "warning_count": warning_count,
+    }
 
 
 def _find_elf(project_path: str, config: str, build_output: str) -> str | None:
@@ -129,19 +184,19 @@ def _do_build(
     # Find CubeIDE
     cubeide = find_cubeide()
     if not cubeide:
-        return {"success": False, "output": "STM32CubeIDE not found. Install it or check the path."}
+        return {"success": False, "summary": "Build: FAILED\n  STM32CubeIDE not found. Install it or check the path."}
 
     # Validate project
     try:
         project_path = validate_project_path(project_path)
         project_name = get_project_name(project_path)
     except (FileNotFoundError, ValueError) as e:
-        return {"success": False, "output": str(e)}
+        return {"success": False, "summary": f"Build: FAILED\n  {e}"}
 
     # Check workspace lock
     lock_err = _check_and_clear_workspace_lock()
     if lock_err:
-        return {"success": False, "output": lock_err}
+        return {"success": False, "summary": f"Build: FAILED\n  {lock_err}"}
 
     # Build the command
     build_target = f"{project_name}/{configuration}"
@@ -171,10 +226,9 @@ def _do_build(
             timeout=BUILD_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        return {"success": False, "output": f"Build timed out after {BUILD_TIMEOUT}s."}
+        return {"success": False, "summary": f"Build: FAILED\n  Build timed out after {BUILD_TIMEOUT}s."}
 
     raw_output = result.stdout + "\n" + result.stderr
-    filtered = _filter_build_output(raw_output)
 
     # Detect success
     has_build_finished = bool(re.search(r"Build Finished", raw_output, re.IGNORECASE))
@@ -196,6 +250,9 @@ def _do_build(
     if success:
         _imported_projects[cache_key] = True
 
+    # Summarize build output
+    build_summary = _summarize_build(raw_output, project_name)
+
     # Find ELF
     elf_path = None
     if success:
@@ -203,7 +260,8 @@ def _do_build(
 
     return {
         "success": success,
-        "output": filtered,
+        "summary": build_summary["summary"],
+        "log_path": build_summary["log_path"],
         "elf_path": elf_path,
         "project_path": project_path,
         "configuration": configuration,
@@ -241,16 +299,9 @@ async def stm32_build(
 
     # Format output
     parts = []
-    if result["success"]:
-        parts.append("BUILD SUCCESSFUL")
-        if result.get("elf_path"):
-            parts.append(f"ELF: {result['elf_path']}")
-    else:
-        parts.append("BUILD FAILED")
-
-    parts.append("")
-    parts.append(result["output"])
-
+    parts.append(result["summary"])
+    if result["success"] and result.get("elf_path"):
+        parts.append(f"ELF: {result['elf_path']}")
     return "\n".join(parts)
 
 
@@ -293,27 +344,20 @@ async def stm32_build_and_flash(
     )
 
     parts = []
+    parts.append(build_result["summary"])
+
     if not build_result["success"]:
-        parts.append("BUILD FAILED — skipping flash.")
-        parts.append("")
-        parts.append(build_result["output"])
         return "\n".join(parts)
 
-    parts.append("BUILD SUCCESSFUL")
     if build_result.get("elf_path"):
         parts.append(f"ELF: {build_result['elf_path']}")
-    parts.append("")
-    parts.append(build_result["output"])
 
     # Flash
     elf_path = build_result.get("elf_path")
     if not elf_path:
-        parts.append("")
         parts.append("ERROR: Build succeeded but no .elf file found. Cannot flash.")
         return "\n".join(parts)
 
-    parts.append("")
-    parts.append("--- FLASHING ---")
     flash_output = await stm32_flash(elf_path, reset=reset, verify=verify, probe=probe)
     parts.append(flash_output)
 

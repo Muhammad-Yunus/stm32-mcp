@@ -367,12 +367,20 @@ def resolve_probe_full(probe: str) -> tuple[str, str, int]:
 
     # Cache miss — enumerate probes and retry
     if sn:
-        _enumerate_probes()
+        probes = _enumerate_probes()
         cached = _probe_cache.get(sn)
         if cached and cached.get("chipid"):
             chipid = cached["chipid"]
             target_cfg = openocd_target_cfg(chipid) or ""
             return sn, target_cfg, chipid
+
+        # Probe SN was resolved (e.g. from nickname) but enumeration couldn't
+        # determine the target config. Check if the probe is physically present
+        # but has no target MCU (chipid 0x000).
+        for p in probes:
+            if p["stlink_sn"] == sn and p["chipid"] == 0:
+                # Probe is connected but no target MCU detected
+                return sn, "", -1  # sentinel: probe found, no target
 
     return sn, "", 0
 
