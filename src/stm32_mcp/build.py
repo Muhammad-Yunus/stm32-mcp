@@ -56,7 +56,7 @@ def _check_and_clear_workspace_lock() -> str | None:
 LOG_DIR = "/tmp/stm32-mcp-logs"
 
 # Patterns for diagnostics and linker errors
-_DIAGNOSTIC_RE = re.compile(r":\d+:\d+:\s*(error|warning|note):")
+_DIAGNOSTIC_RE = re.compile(r":\d+:\d+:\s*(fatal\s+error|error|warning|note):")
 _LINKER_ERROR_PATTERNS = [
     re.compile(r"undefined reference"),
     re.compile(r"ld returned"),
@@ -91,7 +91,7 @@ def _summarize_build(raw: str, project_name: str) -> dict:
     linker_errors = []
     for line in lines:
         if _DIAGNOSTIC_RE.search(line):
-            if ": error:" in line:
+            if ": error:" in line or ": fatal error:" in line:
                 errors.append(line.strip())
             elif ": warning:" in line:
                 warnings.append(line.strip())
@@ -235,6 +235,11 @@ def _do_build(
     has_errors = bool(re.search(r":\d+:\d+:\s*error:", raw_output))
     has_build_failed = bool(re.search(r"Build Failed", raw_output, re.IGNORECASE))
     success = has_build_finished and not has_errors and not has_build_failed
+
+    # If import failed because project already in workspace, retry without -import
+    if not success and "already exists in the workspace" in raw_output:
+        _imported_projects[cache_key] = True
+        return _do_build(project_path, configuration, clean)
 
     # If build failed because project not found, retry with -import
     if not success and not _retry:
