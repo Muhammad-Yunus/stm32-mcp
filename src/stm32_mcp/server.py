@@ -16,6 +16,8 @@ from .serial_tools import (
     serial_read,
     serial_send,
 )
+from .serial_sequence import serial_sequence
+from .live_memory import live_memory_start, live_memory_stop, live_memory_read
 
 INSTRUCTIONS = """\
 stm32-mcp: Build, flash, and communicate with STM32 hardware.
@@ -33,8 +35,12 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - serial_send          — Send data and read response
 - serial_read          — Read buffered serial data
 - serial_disconnect    — Close a serial connection
+- serial_sequence     — Run multi-step send/delay sequences in one call (timing-sensitive tests)
 - stm32_read_memory    — Read memory by address or variable name (from ELF symbols)
 - stm32_write_memory   — Write memory by address or variable name
+- live_memory_start    — Start continuous background memory monitoring via SWD
+- live_memory_stop     — Stop a live memory session
+- live_memory_read     — Read recent entries from a live memory session
 
 ## Typical Workflow
 
@@ -68,11 +74,27 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - stm32_write_memory  — Write memory by address or variable name
 - Use symbol param with elf_path to read/write by name instead of hex address
 - Width auto-detected from ELF symbol size when using symbol names
+
+## Serial Sequences
+
+- serial_sequence runs multiple send/delay steps in one tool call with real timing
+- Steps: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"} or {"delay_ms": 500}
+- Optional per-step: "expect" (substring match), "read_timeout", "line_ending"
+- on_failure: "continue" (default) or "stop"
+- filter_responses: true to match expect only against >-prefixed VCP lines
+
+## Live Memory Monitoring
+
+- live_memory_start opens a persistent OpenOCD connection and polls variables via SWD
+- live_memory_read returns recent values from an in-memory ring buffer
+- live_memory_stop kills OpenOCD and returns session stats
+- Only one session per probe — stop before flashing or using stm32_read/write_memory
+- Output is JSONL at the specified path (default /tmp/live_memory_<id>.jsonl)
 """
 
 mcp = FastMCP("stm32-mcp", instructions=INSTRUCTIONS)
 
-# Register all 13 tools
+# Register all 17 tools
 mcp.tool()(stm32_build)
 mcp.tool()(stm32_build_and_flash)
 mcp.tool()(stm32_flash)
@@ -84,8 +106,12 @@ mcp.tool()(serial_connect)
 mcp.tool()(serial_send)
 mcp.tool()(serial_read)
 mcp.tool()(serial_disconnect)
+mcp.tool()(serial_sequence)
 mcp.tool()(stm32_read_memory)
 mcp.tool()(stm32_write_memory)
+mcp.tool()(live_memory_start)
+mcp.tool()(live_memory_stop)
+mcp.tool()(live_memory_read)
 
 
 def main():
