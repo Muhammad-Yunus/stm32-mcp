@@ -1,8 +1,11 @@
 # stm32-mcp
 
-MCP server that lets Claude Code build, flash, and communicate with STM32 hardware — closing the edit-compile-flash-test loop without leaving the terminal.
+MCP server that lets Claude Code build, flash, and communicate with STM32 hardware.
 
 [MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets AI assistants like Claude use external tools. This server gives Claude the ability to compile your firmware, flash it to a board, talk to it over serial, and read memory via SWD — all from a single conversation.
+
+> [!WARNING]
+> This server gives an AI direct access to your compiler, debug probe, and serial ports. It can flash firmware, overwrite memory, and send arbitrary data to your hardware. This is powerful and useful, but it is not a sandbox. Know what's connected before you let it rip. "Big Cowboy Energy"
 
 ## Prerequisites
 
@@ -50,42 +53,42 @@ Add to your project's `.claude/settings.json` or `.claude.json`:
 
 ### Build & Flash
 
-| Tool | Description |
-|------|-------------|
-| `stm32_build` | Compile firmware using CubeIDE headless builder |
-| `stm32_flash` | Flash .elf/.bin/.hex to board via ST-Link SWD |
-| `stm32_build_and_flash` | Build + flash in one step (the 90% case) |
-| `stm32_board_info` | Read ST-Link/MCU info (device ID, flash size, voltage) |
+| Tool                    | Description                                            |
+| ----------------------- | ------------------------------------------------------ |
+| `stm32_build`           | Compile firmware using CubeIDE headless builder        |
+| `stm32_flash`           | Flash .elf/.bin/.hex to board via ST-Link SWD          |
+| `stm32_build_and_flash` | Build + flash in one step (the 90% case)               |
+| `stm32_board_info`      | Read ST-Link/MCU info (device ID, flash size, voltage) |
 
 ### Multi-Board Management
 
-| Tool | Description |
-|------|-------------|
-| `stm32_list_probes` | Show all connected boards with nicknames and MCU IDs |
-| `stm32_set_nickname` | Name a board (by MCU UID) or probe (by ST-Link SN) |
+| Tool                 | Description                                          |
+| -------------------- | ---------------------------------------------------- |
+| `stm32_list_probes`  | Show all connected boards with nicknames and MCU IDs |
+| `stm32_set_nickname` | Name a board (by MCU UID) or probe (by ST-Link SN)   |
 
 Board nicknames follow the physical MCU (persist across probe swaps). Probe nicknames follow the ST-Link hardware. Use nicknames in any `probe` parameter across all tools.
 
 ### Serial Communication
 
-| Tool | Description |
-|------|-------------|
+| Tool                | Description                                                |
+| ------------------- | ---------------------------------------------------------- |
 | `serial_list_ports` | List serial ports (marks ST-Link VCP ports with nicknames) |
-| `serial_connect` | Open a serial connection |
-| `serial_send` | Send data and read response |
-| `serial_read` | Read buffered serial data |
-| `serial_disconnect` | Close a serial connection |
-| `serial_sequence` | Run multi-step send/delay sequences in one call |
+| `serial_connect`    | Open a serial connection                                   |
+| `serial_send`       | Send data and read response                                |
+| `serial_read`       | Read buffered serial data                                  |
+| `serial_disconnect` | Close a serial connection                                  |
+| `serial_sequence`   | Run multi-step send/delay sequences in one call            |
 
 ### Debug & Monitoring
 
-| Tool | Description |
-|------|-------------|
-| `stm32_read_memory` | Read memory by address or variable name (from ELF symbols) |
-| `stm32_write_memory` | Write memory by address or variable name |
-| `live_memory_start` | Start continuous background memory monitoring via SWD |
-| `live_memory_read` | Read recent entries from a live memory session |
-| `live_memory_stop` | Stop a live memory session |
+| Tool                 | Description                                                |
+| -------------------- | ---------------------------------------------------------- |
+| `stm32_read_memory`  | Read memory by address or variable name (from ELF symbols) |
+| `stm32_write_memory` | Write memory by address or variable name                   |
+| `live_memory_start`  | Start continuous background memory monitoring via SWD      |
+| `live_memory_read`   | Read recent entries from a live memory session             |
+| `live_memory_stop`   | Stop a live memory session                                 |
 
 ## Serial Sequences
 
@@ -95,10 +98,19 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
 
 ```json
 [
-  {"send": "SIM_LEFT", "to": "/dev/cu.usbmodem11202"},
-  {"delay_ms": 500},
-  {"send": "GET_BLINK_STATE", "to": "/dev/cu.usbmodem11402", "expect": "BLINK"},
-  {"send": "SET_BRAKE_ON", "to": "/dev/cu.usbmodem11402", "read_timeout": 1.0, "line_ending": "lf"}
+  { "send": "SIM_LEFT", "to": "/dev/cu.usbmodem11202" },
+  { "delay_ms": 500 },
+  {
+    "send": "GET_BLINK_STATE",
+    "to": "/dev/cu.usbmodem11402",
+    "expect": "BLINK"
+  },
+  {
+    "send": "SET_BRAKE_ON",
+    "to": "/dev/cu.usbmodem11402",
+    "read_timeout": 1.0,
+    "line_ending": "lf"
+  }
 ]
 ```
 
@@ -141,6 +153,7 @@ live_memory_start(
 ```
 
 Variables can be:
+
 - **Symbol names** (strings): `"blink"` — resolved from the ELF via `arm-none-eabi-nm`
 - **Dicts with symbol + type**: `{"symbol": "temperature", "type": "float"}` — interprets 32-bit value as IEEE 754
 - **Dicts with raw address**: `{"address": "0x20000304", "name": "x", "width": 32}`
@@ -156,7 +169,7 @@ Returns recent entries from an in-memory ring buffer (max 100 entries). Full his
 ### JSONL output format
 
 ```json
-{"t": 1709830123.456, "elapsed_s": 1.002, "values": {"blink": 65539}}
+{ "t": 1709830123.456, "elapsed_s": 1.002, "values": { "blink": 65539 } }
 ```
 
 ### Stop a session
