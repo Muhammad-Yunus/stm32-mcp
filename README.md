@@ -2,7 +2,19 @@
 
 MCP server that lets Claude Code build, flash, and communicate with STM32 hardware.
 
-[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets AI assistants like Claude use external tools. This server gives Claude the ability to compile your firmware, flash it to a board, talk to it over serial, and read memory via SWD — all from a single conversation.
+stm32-mcp is pretty specific to how I tend to approach hardware development, but it is likely useful to others, too! It could be massaged to fit lots of workflows, but this is laser focused on mine (stlink-v3 mini, VCP on that header, STM32 microcontroller). 
+
+You can do things like:
+me       -   hey who is plugged in right now?
+claude   -   two unnamed probes connected to two unnamed PCBs
+me       -   k ask them who they are and give them a nickname based on their response (nicknames are persistent, stored in the MCP and mapped to serial numbers)
+claude   -   got it, do you want to nickname the probes too? your boards are 'doorbell A' and 'sythesizer B'
+me       -   yep, I put paint marker on those probes. call doorbell's 'blue' and the synth's 'red'" 
+claude   -   done. what's next?"
+me       -   give them both VCP commands so they can talk to each other, then have the doorbell ask the synth on a date
+claude   -   -thinking...- done, synth declined. plenty of fish in the sea, doorbell!
+
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets AI assistants like Claude use external tools. This server gives Claude the ability to compile your firmware, flash it to a board, talk to it over serial, and read memory via SWD. It is flexible and conversational. 
 
 > [!WARNING]
 > This server gives an AI direct access to your compiler, debug probe, and serial ports. It can flash firmware, overwrite memory, and send arbitrary data to your hardware. This is powerful and useful, but it is not a sandbox. Know what's connected before you let it rip.
