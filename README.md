@@ -2,6 +2,8 @@
 
 MCP server that lets Claude Code build, flash, and communicate with STM32 hardware — closing the edit-compile-flash-test loop without leaving the terminal.
 
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets AI assistants like Claude use external tools. This server gives Claude the ability to compile your firmware, flash it to a board, talk to it over serial, and read memory via SWD — all from a single conversation.
+
 ## Prerequisites
 
 - **STM32CubeIDE** installed at `/Applications/STM32CubeIDE.app` (macOS) or `/opt/st/stm32cubeide_*` (Linux)
@@ -14,7 +16,8 @@ MCP server that lets Claude Code build, flash, and communicate with STM32 hardwa
 ## Installation
 
 ```bash
-cd ~/Desktop/shieldy/MCP/stm32-mcp
+git clone https://github.com/shieldyguy/stm32-mcp.git
+cd stm32-mcp
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -36,7 +39,7 @@ Add to your project's `.claude/settings.json` or `.claude.json`:
 {
   "mcpServers": {
     "stm32": {
-      "command": "/Users/chrismcdowell/Desktop/shieldy/MCP/stm32-mcp/.venv/bin/python",
+      "command": "/path/to/stm32-mcp/.venv/bin/python",
       "args": ["-m", "stm32_mcp.server"]
     }
   }

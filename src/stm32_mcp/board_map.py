@@ -513,7 +513,7 @@ async def stm32_set_nickname(
     If nickname is empty, removes the mapping.
 
     Args:
-        nickname: Human-readable name (e.g., "RYCO CCB", "red").
+        nickname: Human-readable name (e.g., "blinky", "sensor-board").
         mcu_uid: MCU unique device ID (for board nicknames).
         stlink_sn: ST-Link serial number (for probe nicknames).
 
