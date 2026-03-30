@@ -10,7 +10,7 @@ You can do things like:
 >
 > **claude:** two unnamed probes connected to two unnamed PCBs
 >
-> **me:** k ask them who they are and give them a nickname based on their response (nicknames are persistent, stored in the MCP and mapped to serial numbers)
+> **me:** k ask them who they are and give them a nickname based on their response 
 >
 > **claude:** got it, do you want to nickname the probes too? your boards are 'doorbell A' and 'synthesizer B'
 >
