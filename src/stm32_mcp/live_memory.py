@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from .board_map import resolve_probe_full
 from .debug_tools import _resolve_symbol, _width_from_size, _ocd_read_cmd
+from .struct_layout import expand_struct
 from .toolchain import find_openocd, openocd_workarea, openocd_target_cfg
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -160,6 +161,19 @@ def _resolve_variables(variables_json: str, elf_path: str) -> list[ResolvedVaria
             if result is None:
                 raise ValueError(f'Symbol "{spec}" not found in {os.path.basename(elf_path)}')
             addr, size = result
+
+            # Auto-expand structs (size > 4 bytes)
+            if size > 4:
+                fields = expand_struct(elf_path, spec)
+                if fields:
+                    for f in fields:
+                        resolved.append(ResolvedVariable(
+                            name=f"{spec}.{f.name}",
+                            address=addr + f.offset,
+                            width=_width_from_size(f.size),
+                        ))
+                    continue
+
             resolved.append(ResolvedVariable(
                 name=spec,
                 address=addr,
@@ -179,6 +193,19 @@ def _resolve_variables(variables_json: str, elf_path: str) -> list[ResolvedVaria
                 addr, size = result
                 name = spec.get("name", sym_name)
                 width = spec.get("width", _width_from_size(size))
+
+                # Auto-expand structs unless expand=false
+                if size > 4 and spec.get("expand", True):
+                    fields = expand_struct(elf_path, sym_name)
+                    if fields:
+                        for f in fields:
+                            resolved.append(ResolvedVariable(
+                                name=f"{name}.{f.name}",
+                                address=addr + f.offset,
+                                width=_width_from_size(f.size),
+                            ))
+                        continue
+
                 resolved.append(ResolvedVariable(
                     name=name, address=addr, width=width, is_float=is_float,
                 ))
@@ -211,6 +238,45 @@ def _parse_mdw_value(response: str) -> int | None:
     if m:
         return int(m.group(1), 16)
     return None
+
+
+def _try_reconnect(session: LiveMemorySession, max_retries: int = 3) -> bool:
+    """Try to restart OpenOCD and reconnect TCL socket. Returns True on success."""
+    # Clean up dead connection
+    if session.tcl_sock:
+        try:
+            session.tcl_sock.close()
+        except OSError:
+            pass
+        session.tcl_sock = None
+    if session.process:
+        try:
+            session.process.terminate()
+            session.process.wait(timeout=3)
+        except Exception:
+            try:
+                session.process.kill()
+            except Exception:
+                pass
+        session.process = None
+
+    for attempt in range(max_retries):
+        if session.stop_event.is_set():
+            return False
+        delay = (1 << attempt)  # 1s, 2s, 4s
+        session.stop_event.wait(delay)
+        if session.stop_event.is_set():
+            return False
+
+        try:
+            proc, sock = _start_openocd(session.sn, session.target_cfg, session.chipid)
+            session.process = proc
+            session.tcl_sock = sock
+            return True
+        except (FileNotFoundError, RuntimeError):
+            session.error_count += 1
+
+    return False
 
 
 def _run_session(session: LiveMemorySession) -> None:
@@ -249,33 +315,36 @@ def _run_session(session: LiveMemorySession) -> None:
                     else:
                         values[var.name] = f"ERROR: parse failed: {response.strip()}"
                         had_error = True
-                except (OSError, ConnectionError) as e:
-                    # OpenOCD died or socket error — end session
+                except (OSError, ConnectionError):
+                    # OpenOCD died or socket error — try to reconnect
                     session.error_count += 1
-                    return
+                    if not _try_reconnect(session):
+                        return
+                    break  # restart the variable loop with fresh connection
+            else:
+                # Only record entry if we read all variables (no break)
+                entry = {
+                    "t": round(time.time(), 3),
+                    "elapsed_s": round(elapsed_s, 3),
+                    "values": values,
+                }
 
-            entry = {
-                "t": round(time.time(), 3),
-                "elapsed_s": round(elapsed_s, 3),
-                "values": values,
-            }
+                session.ring_buffer.append(entry)
+                session.read_count += 1
+                if had_error:
+                    session.error_count += 1
 
-            session.ring_buffer.append(entry)
-            session.read_count += 1
-            if had_error:
-                session.error_count += 1
+                try:
+                    output_file.write(json.dumps(entry) + "\n")
+                    output_file.flush()
+                except OSError:
+                    pass
 
-            try:
-                output_file.write(json.dumps(entry) + "\n")
-                output_file.flush()
-            except OSError:
-                pass
-
-            # Interruptible sleep for remaining interval
-            loop_elapsed = time.monotonic() - loop_start
-            remaining = (session.interval_ms / 1000.0) - loop_elapsed
-            if remaining > 0:
-                session.stop_event.wait(remaining)
+                # Interruptible sleep for remaining interval
+                loop_elapsed = time.monotonic() - loop_start
+                remaining = (session.interval_ms / 1000.0) - loop_elapsed
+                if remaining > 0:
+                    session.stop_event.wait(remaining)
 
     except (OSError, ConnectionError):
         session.error_count += 1
@@ -322,8 +391,11 @@ async def live_memory_start(
 
     Args:
         variables: JSON array of variables to monitor. Elements can be:
-            - String: symbol name resolved from ELF (e.g. "blink")
+            - String: symbol name resolved from ELF (e.g. "blink").
+              Structs (size > 4 bytes) are auto-expanded into individual fields
+              with dotted names (e.g. "blink.state", "blink.prev_output.changed").
             - Dict with "symbol": {"symbol": "temp", "type": "float"}
+              Add "expand": false to disable struct auto-expansion.
             - Dict with "address": {"address": "0x20000304", "name": "x", "width": 32}
         elf_path: Path to .elf file for symbol resolution.
         probe: Board nickname, probe nickname, or ST-Link SN.

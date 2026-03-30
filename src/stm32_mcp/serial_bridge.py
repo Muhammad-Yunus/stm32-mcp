@@ -180,7 +180,7 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 continue
 
             if cmd.startswith("connect "):
-                target = line.split(None, 1)[1]
+                target = line.split(None, 1)[1].strip("\"'")
 
                 # Try nickname resolution first
                 resolved = _resolve_nickname_to_port(target)

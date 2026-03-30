@@ -1,8 +1,18 @@
-"""Toolchain discovery — find CubeIDE, OpenOCD, st-info, nm, parse project files."""
+"""Toolchain discovery — find CubeIDE, OpenOCD, st-info, and ARM toolchain.
+
+ARM TOOLCHAIN (arm-none-eabi-nm, arm-none-eabi-gdb, etc.):
+  These are found via PATH. The CubeIDE-bundled toolchain directory must be on
+  PATH in ~/.zshrc. If tools are not found, CubeIDE was probably updated and
+  the versioned plugin path changed. Fix: update the PATH export in ~/.zshrc to
+  match the new plugin directory under:
+    /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/
+        com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/
+"""
 
 import glob
 import os
 import re
+import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -11,11 +21,9 @@ from pathlib import Path
 _cubeide_path: str | None = None
 _openocd_path: str | None = None
 _st_info_path: str | None = None
-_nm_path: str | None = None
 _cubeide_searched = False
 _openocd_searched = False
 _st_info_searched = False
-_nm_searched = False
 
 
 def find_cubeide() -> str | None:
@@ -81,33 +89,13 @@ def find_st_info() -> str | None:
 
 
 def find_nm() -> str | None:
-    """Find arm-none-eabi-nm inside CubeIDE plugins. Caches result after first lookup."""
-    global _nm_path, _nm_searched
-    if _nm_searched:
-        return _nm_path
+    """Find arm-none-eabi-nm on PATH (from CubeIDE toolchain)."""
+    return shutil.which("arm-none-eabi-nm")
 
-    patterns = [
-        # macOS CubeIDE
-        "/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/"
-        "com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32*"
-        "/tools/bin/arm-none-eabi-nm",
-        # Linux CubeIDE
-        "/opt/st/stm32cubeide_*/plugins/"
-        "com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32*"
-        "/tools/bin/arm-none-eabi-nm",
-        # System-installed
-        "/opt/homebrew/bin/arm-none-eabi-nm",
-        "/usr/local/bin/arm-none-eabi-nm",
-        "/usr/bin/arm-none-eabi-nm",
-    ]
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            _nm_path = sorted(matches)[-1]
-            break
 
-    _nm_searched = True
-    return _nm_path
+def find_gdb() -> str | None:
+    """Find arm-none-eabi-gdb on PATH (from CubeIDE toolchain)."""
+    return shutil.which("arm-none-eabi-gdb")
 
 
 # ---------------------------------------------------------------------------

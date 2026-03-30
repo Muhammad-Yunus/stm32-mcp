@@ -52,6 +52,13 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 
 ## Rules
 
+- **ARM toolchain** (arm-none-eabi-nm, arm-none-eabi-gdb) must be on PATH.
+  These come from the CubeIDE-bundled toolchain directory added to ~/.zshrc.
+  If symbol resolution or struct expansion fails with "not found", CubeIDE was
+  likely updated and the versioned plugin path in ~/.zshrc needs updating.
+  Look for the new path under: /Applications/STM32CubeIDE.app/Contents/Eclipse/
+  plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/
+  **Tell the user to update their PATH in ~/.zshrc if this happens.**
 - project_path must point to a directory containing .project and .cproject files
 - Never edit files in Debug/, Release/, Drivers/, or .cproject
 - New .c/.h files are automatically detected by the headless builder
@@ -90,6 +97,12 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - live_memory_stop kills OpenOCD and returns session stats
 - Only one session per probe — stop before flashing or using stm32_read/write_memory
 - Output is JSONL at the specified path (default /tmp/live_memory_<id>.jsonl)
+- **Struct auto-expansion**: Pass a struct variable name (e.g. `"blink"`) and all
+  fields are automatically expanded with dotted names (e.g. `blink.state`,
+  `blink.prev_output.changed`). Nested structs are recursively expanded.
+  Uses GDB DWARF info — works with `-fshort-enums`, padding, etc.
+  To monitor a struct as raw bytes instead, use `{"symbol": "blink", "expand": false}`.
+- Sessions auto-reconnect if ST-Link connection drops (up to 3 retries with backoff)
 """
 
 mcp = FastMCP("stm32-mcp", instructions=INSTRUCTIONS)
