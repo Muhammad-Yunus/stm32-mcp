@@ -2,13 +2,73 @@
 
 import asyncio
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from .serial_tools import _connections, _read_with_polling, LINE_ENDINGS
 from .serial_bridge import _get_send_lock
 
 _executor = ThreadPoolExecutor(max_workers=2)
+
+CAPTURE_DIR = Path("/tmp/stm32-captures")
+
+# Lazy-loaded camera connection
+_camera = None
+_camera_device = None
+
+
+def _get_camera(device_index: int = 0):
+    """Get or open a camera connection. Reuses across steps."""
+    global _camera, _camera_device
+    if _camera is not None and _camera_device == device_index and _camera.isOpened():
+        return _camera
+    # Close existing if switching devices
+    if _camera is not None:
+        _camera.release()
+    import cv2
+    _camera = cv2.VideoCapture(device_index)
+    _camera_device = device_index
+    if not _camera.isOpened():
+        _camera = None
+        _camera_device = None
+        return None
+    # Let the camera auto-expose for a moment
+    _camera.read()
+    return _camera
+
+
+def _release_camera():
+    """Release the camera after a sequence completes."""
+    global _camera, _camera_device
+    if _camera is not None:
+        _camera.release()
+        _camera = None
+        _camera_device = None
+
+
+def _do_capture(step: dict, step_num: int) -> str:
+    """Capture a frame and save to disk. Returns report line."""
+    import cv2
+
+    device_index = int(step.get("device_index", 0))
+    label = step.get("label", f"step{step_num}")
+
+    cam = _get_camera(device_index)
+    if cam is None:
+        return f"Step {step_num} CAPTURE: ERROR — could not open camera {device_index}"
+
+    ret, frame = cam.read()
+    if not ret or frame is None:
+        return f"Step {step_num} CAPTURE: ERROR — frame grab failed"
+
+    CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"seq_step{step_num}_{label}.png"
+    filepath = CAPTURE_DIR / filename
+    cv2.imwrite(str(filepath), frame)
+
+    return f"Step {step_num} CAPTURE: {filepath}"
 
 
 def _do_serial_sequence(
@@ -30,6 +90,7 @@ def _do_serial_sequence(
     send_ok = 0
     assert_count = 0
     assert_pass = 0
+    capture_count = 0
     stopped = False
 
     for i, step in enumerate(steps, 1):
@@ -42,6 +103,14 @@ def _do_serial_sequence(
             ms = int(step["delay_ms"])
             lines.append(f"Step {i} DELAY: {ms}ms")
             time.sleep(ms / 1000.0)
+            continue
+
+        # --- Capture step ---
+        if "capture" in step:
+            capture_count += 1
+            result = _do_capture(step, i)
+            lines.append(result)
+            lines.append("")
             continue
 
         # --- Send step ---
@@ -118,10 +187,16 @@ def _do_serial_sequence(
 
         lines.append("")
 
+    # Release camera if we used it
+    if capture_count > 0:
+        _release_camera()
+
     # Summary
     summary_parts = [f"{send_ok}/{send_count} sends OK"]
     if assert_count > 0:
         summary_parts.append(f"{assert_pass}/{assert_count} assertions PASS")
+    if capture_count > 0:
+        summary_parts.append(f"{capture_count} captures saved to {CAPTURE_DIR}")
     if stopped:
         summary_parts.append("STOPPED on failure")
     lines.append(f"Summary: {', '.join(summary_parts)}")
@@ -136,16 +211,19 @@ async def serial_sequence(
 ) -> str:
     """Run a multi-step serial command sequence in one tool call.
 
-    Executes a list of send and delay steps sequentially with real timing
-    (no tool-call overhead between steps). Useful for hardware test sequences
-    that are timing-sensitive.
+    Executes a list of send, delay, and capture steps sequentially with real
+    timing (no tool-call overhead between steps). Useful for hardware test
+    sequences that are timing-sensitive.
 
     Args:
         steps: JSON array of step objects. Step types:
             Send: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX", "expect": "OK", "read_timeout": 2.0, "line_ending": "lf"}
             Delay: {"delay_ms": 500}
+            Capture: {"capture": true, "label": "my_label", "device_index": 0}
             The "to" field is the connection_id (port path) from serial_connect.
             "expect", "read_timeout", and "line_ending" are optional on send steps.
+            "label" and "device_index" are optional on capture steps.
+            Captures are saved to /tmp/stm32-captures/ as PNG files.
         on_failure: "continue" (default) to run all steps, or "stop" to abort on first failure.
         filter_responses: If true, expect patterns match only >-prefixed VCP response lines.
 

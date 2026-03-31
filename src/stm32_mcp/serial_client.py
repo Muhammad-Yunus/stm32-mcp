@@ -16,16 +16,21 @@ def main():
         print("Is the MCP server running?")
         sys.exit(1)
 
+    sock.settimeout(None)  # blocking mode — timeout was only for connect
     f = sock.makefile("rb")
 
-    # Read welcome banner (everything up to and including the first "> ")
+    # Read welcome banner (everything up to and including the first "\n> ")
     banner = b""
-    while not banner.endswith(b"> "):
+    while not banner.endswith(b"\n> "):
         chunk = f.read(1)
         if not chunk:
             break
         banner += chunk
-    print(banner.decode("utf-8", errors="replace"), end="", flush=True)
+    # Print banner without the trailing "\n> " — input() will show the prompt
+    banner_text = banner.decode("utf-8", errors="replace")
+    if banner_text.endswith("\n> "):
+        banner_text = banner_text[:-3]
+    print(banner_text, flush=True)
 
     # If a port path or nickname was given on the command line, send a connect command
     # Supports: stm32-serial /dev/cu.usbmodem1234
@@ -35,12 +40,12 @@ def main():
         target = " ".join(sys.argv[1:])  # handles multi-word nicknames
         sock.sendall(f"connect {target}\n".encode())
         resp = _read_until_prompt(f)
-        print(resp, end="", flush=True)
+        print(_strip_prompt(resp), flush=True)
 
     try:
         while True:
             try:
-                line = input()
+                line = input("> ")
             except EOFError:
                 break
 
@@ -48,21 +53,30 @@ def main():
 
             if line.strip().lower() in ("quit", "exit"):
                 resp = _read_until_prompt(f)
-                print(resp, end="", flush=True)
+                print(_strip_prompt(resp), flush=True)
                 break
 
             resp = _read_until_prompt(f)
-            print(resp, end="", flush=True)
+            print(_strip_prompt(resp), flush=True)
     except KeyboardInterrupt:
         print()
+    except (ConnectionResetError, BrokenPipeError):
+        print("\nBridge connection lost.")
     finally:
         sock.close()
 
 
+def _strip_prompt(text: str) -> str:
+    """Remove the trailing '\\n> ' prompt so input() can show it instead."""
+    if text.endswith("\n> "):
+        return text[:-3]
+    return text
+
+
 def _read_until_prompt(f) -> str:
-    """Read from the socket file until we see '> ' prompt or EOF."""
+    """Read from the socket file until we see '\\n> ' prompt or EOF."""
     buf = b""
-    while not buf.endswith(b"> "):
+    while not buf.endswith(b"\n> "):
         chunk = f.read(1)
         if not chunk:
             break

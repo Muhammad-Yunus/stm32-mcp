@@ -146,7 +146,7 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 break
             line = line_bytes.decode("utf-8", errors="replace").strip()
             if not line:
-                writer.write(b"> ")
+                writer.write(b"\n> ")
                 await writer.drain()
                 continue
 
@@ -206,10 +206,15 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
 
             lock = _get_send_lock(active)
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: _locked_send(lock, active, line),
-            )
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: _locked_send(lock, active, line),
+                )
+            except Exception as e:
+                writer.write(f"ERROR: {e}\n> ".encode())
+                await writer.drain()
+                continue
 
             # Extract just the response text (skip the "Sent: ..." line)
             response_lines = result.split("\n")
@@ -223,6 +228,13 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             await writer.drain()
     except (ConnectionResetError, BrokenPipeError):
         pass
+    except Exception as e:
+        log.exception("Bridge handler crashed")
+        try:
+            writer.write(f"\nBRIDGE CRASH: {type(e).__name__}: {e}\n".encode())
+            await writer.drain()
+        except Exception:
+            pass
     finally:
         log.info("Bridge client disconnected: %s", peer)
         writer.close()

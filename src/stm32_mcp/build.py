@@ -234,7 +234,8 @@ def _do_build(
     has_build_finished = bool(re.search(r"Build Finished", raw_output, re.IGNORECASE))
     has_errors = bool(re.search(r":\d+:\d+:\s*error:", raw_output))
     has_build_failed = bool(re.search(r"Build Failed", raw_output, re.IGNORECASE))
-    success = has_build_finished and not has_errors and not has_build_failed
+    was_skipped = bool(re.search(r"Skipping\.\.\.", raw_output))
+    success = has_build_finished and not has_errors and not has_build_failed and not was_skipped
 
     # If import failed because project already in workspace, retry without -import
     if not success and "already exists in the workspace" in raw_output:
@@ -246,6 +247,8 @@ def _do_build(
         not_found = (
             "not found in workspace" in raw_output.lower()
             or "could not find" in raw_output.lower()
+            or "no project matched" in raw_output.lower()
+            or "doesn't appear to be a cdt project" in raw_output.lower()
         )
         if not_found:
             _imported_projects.pop(cache_key, None)

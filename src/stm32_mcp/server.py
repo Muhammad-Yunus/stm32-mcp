@@ -84,9 +84,10 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 
 ## Serial Sequences
 
-- serial_sequence runs multiple send/delay steps in one tool call with real timing
-- Steps: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"} or {"delay_ms": 500}
+- serial_sequence runs multiple send/delay/capture steps in one tool call with real timing
+- Steps: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"} or {"delay_ms": 500} or {"capture": true, "label": "name"}
 - Optional per-step: "expect" (substring match), "read_timeout", "line_ending"
+- Capture steps save PNG images to /tmp/stm32-captures/ — use Read tool to view after
 - on_failure: "continue" (default) or "stop"
 - filter_responses: true to match expect only against >-prefixed VCP lines
 

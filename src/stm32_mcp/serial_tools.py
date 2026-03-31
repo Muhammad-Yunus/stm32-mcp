@@ -161,7 +161,11 @@ def _do_send(
     parts = [f"Sent: {data!r}"]
 
     if read_response:
-        response = _read_with_polling(ser, timeout=read_timeout)
+        try:
+            response = _read_with_polling(ser, timeout=read_timeout)
+        except serial.SerialException as e:
+            parts.append(f"Response: ERROR reading: {e}")
+            return "\n".join(parts)
         if response:
             try:
                 text = response.decode("utf-8", errors="replace").strip()
