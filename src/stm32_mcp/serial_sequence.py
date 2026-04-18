@@ -9,6 +9,8 @@ from pathlib import Path
 
 from .serial_tools import _connections, _read_with_polling, LINE_ENDINGS
 from .serial_bridge import _get_send_lock
+from .debug_tools import _do_read_memory, _do_write_memory
+from .board_map import resolve_probe_full
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -91,6 +93,10 @@ def _do_serial_sequence(
     assert_count = 0
     assert_pass = 0
     capture_count = 0
+    mem_write_count = 0
+    mem_write_ok = 0
+    mem_read_count = 0
+    mem_read_ok = 0
     stopped = False
 
     for i, step in enumerate(steps, 1):
@@ -111,6 +117,56 @@ def _do_serial_sequence(
             result = _do_capture(step, i)
             lines.append(result)
             lines.append("")
+            continue
+
+        # --- Memory write step ---
+        if step.get("mem_write") is True:
+            mem_write_count += 1
+            address = step.get("address", "")
+            symbol = step.get("symbol", "")
+            elf_path = step.get("elf_path", "")
+            value = step.get("value", "")
+            width = int(step.get("width", 32))
+            probe = step.get("probe", "")
+
+            sn, target_cfg, chipid = resolve_probe_full(probe)
+            result = _do_write_memory(
+                address, symbol, elf_path, value, width, sn, target_cfg, chipid
+            )
+            probe_tag = f"[{probe}] " if probe else ""
+            lines.append(f"Step {i} {probe_tag}MEM_WRITE: {result}")
+            if result.startswith("ERROR"):
+                if on_failure == "stop":
+                    stopped = True
+                    break
+            else:
+                mem_write_ok += 1
+            continue
+
+        # --- Memory read step ---
+        if step.get("mem_read") is True:
+            mem_read_count += 1
+            address = step.get("address", "")
+            symbol = step.get("symbol", "")
+            elf_path = step.get("elf_path", "")
+            count = int(step.get("count", 1))
+            width = int(step.get("width", 32))
+            probe = step.get("probe", "")
+            label = step.get("label", "")
+
+            sn, target_cfg, chipid = resolve_probe_full(probe)
+            result = _do_read_memory(
+                address, symbol, elf_path, count, width, sn, target_cfg, chipid
+            )
+            probe_tag = f"[{probe}] " if probe else ""
+            label_tag = f"{label} " if label else ""
+            lines.append(f"Step {i} {probe_tag}MEM_READ: {label_tag}{result}")
+            if result.startswith("ERROR"):
+                if on_failure == "stop":
+                    stopped = True
+                    break
+            else:
+                mem_read_ok += 1
             continue
 
         # --- Send step ---
@@ -192,11 +248,19 @@ def _do_serial_sequence(
         _release_camera()
 
     # Summary
-    summary_parts = [f"{send_ok}/{send_count} sends OK"]
+    summary_parts = []
+    if send_count > 0:
+        summary_parts.append(f"{send_ok}/{send_count} sends OK")
     if assert_count > 0:
         summary_parts.append(f"{assert_pass}/{assert_count} assertions PASS")
     if capture_count > 0:
         summary_parts.append(f"{capture_count} captures saved to {CAPTURE_DIR}")
+    if mem_write_count > 0:
+        summary_parts.append(f"{mem_write_ok}/{mem_write_count} mem_writes OK")
+    if mem_read_count > 0:
+        summary_parts.append(f"{mem_read_ok}/{mem_read_count} mem_reads OK")
+    if not summary_parts:
+        summary_parts.append("0 steps executed")
     if stopped:
         summary_parts.append("STOPPED on failure")
     lines.append(f"Summary: {', '.join(summary_parts)}")
@@ -209,21 +273,35 @@ async def serial_sequence(
     on_failure: str = "continue",
     filter_responses: bool = False,
 ) -> str:
-    """Run a multi-step serial command sequence in one tool call.
+    """Run a multi-step hardware sequence (serial + SWD memory) in one tool call.
 
-    Executes a list of send, delay, and capture steps sequentially with real
-    timing (no tool-call overhead between steps). Useful for hardware test
-    sequences that are timing-sensitive.
+    Executes a list of send, delay, capture, mem_write, and mem_read steps
+    sequentially with real timing (no tool-call overhead between steps).
+    Useful for hardware test sequences that are timing-sensitive — blinking
+    GPIOs over SWD, bit-banging registers with deterministic delays, mixed
+    serial/memory flows.
+
+    Timing note: each mem_write/mem_read currently launches a fresh OpenOCD
+    process (~tens of ms overhead per op), so sub-10ms delays between memory
+    ops won't be honored precisely. Delay steps themselves are accurate.
 
     Args:
         steps: JSON array of step objects. Step types:
-            Send: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX", "expect": "OK", "read_timeout": 2.0, "line_ending": "lf"}
-            Delay: {"delay_ms": 500}
-            Capture: {"capture": true, "label": "my_label", "device_index": 0}
-            The "to" field is the connection_id (port path) from serial_connect.
-            "expect", "read_timeout", and "line_ending" are optional on send steps.
-            "label" and "device_index" are optional on capture steps.
-            Captures are saved to /tmp/stm32-captures/ as PNG files.
+            Send:      {"send": "CMD", "to": "/dev/cu.usbmodemXXXX", "expect": "OK", "read_timeout": 2.0, "line_ending": "lf"}
+            Delay:     {"delay_ms": 500}
+            Capture:   {"capture": true, "label": "my_label", "device_index": 0}
+            MemWrite:  {"mem_write": true, "address": "0x48000418", "value": "0x40", "probe": "yellow", "width": 32}
+                       or {"mem_write": true, "symbol": "blink", "elf_path": "/path/to.elf", "value": "1", "probe": "yellow"}
+            MemRead:   {"mem_read": true, "address": "0x48000400", "count": 2, "probe": "yellow", "width": 32, "label": "gpio_pre"}
+                       or {"mem_read": true, "symbol": "blink", "elf_path": "/path/to.elf", "probe": "yellow"}
+
+            Serial: "to" is the connection_id from serial_connect. "expect",
+                "read_timeout", "line_ending" optional on send steps.
+            Capture: "label" and "device_index" optional. PNGs saved to /tmp/stm32-captures/.
+            Memory: "probe" accepts board nickname, probe nickname, or ST-Link SN.
+                "address" is hex ("0x48000418"); or use "symbol" + "elf_path".
+                "width" is 8/16/32 bits, defaults to 32 (auto-detected from symbol size).
+                "count" (read only) defaults to 1. "label" (read only) prefixes the result line.
         on_failure: "continue" (default) to run all steps, or "stop" to abort on first failure.
         filter_responses: If true, expect patterns match only >-prefixed VCP response lines.
 

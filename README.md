@@ -98,7 +98,7 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
 | `serial_send`       | Send data and read response                                |
 | `serial_read`       | Read buffered serial data                                  |
 | `serial_disconnect` | Close a serial connection                                  |
-| `serial_sequence`   | Run multi-step send/delay sequences in one call            |
+| `serial_sequence`   | Run multi-step send/delay/memory sequences in one call     |
 
 ### Debug & Monitoring
 
@@ -110,9 +110,9 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
 | `live_memory_read`   | Read recent entries from a live memory session             |
 | `live_memory_stop`   | Stop a live memory session                                 |
 
-## Serial Sequences
+## Hardware Sequences
 
-`serial_sequence` runs multiple send and delay steps in a single tool call with real timing between steps — no tool-call overhead. This is critical for timing-sensitive hardware test sequences.
+`serial_sequence` runs multiple steps — serial send, delay, webcam capture, and SWD memory read/write — in a single tool call with real timing between steps. No tool-call overhead between steps; delays use a real `time.sleep()` in the executor thread. This is critical for timing-sensitive hardware test sequences and for bit-banging registers over SWD (e.g. blinking a GPIO on a board with no firmware).
 
 ### Step types
 
@@ -125,21 +125,40 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
     "to": "/dev/cu.usbmodem11402",
     "expect": "BLINK"
   },
+  { "capture": true, "label": "post_brake" },
   {
-    "send": "SET_BRAKE_ON",
-    "to": "/dev/cu.usbmodem11402",
-    "read_timeout": 1.0,
-    "line_ending": "lf"
+    "mem_write": true,
+    "address": "0x48000418",
+    "value": "0x40",
+    "probe": "yellow"
+  },
+  { "delay_ms": 1000 },
+  {
+    "mem_read": true,
+    "address": "0x48000400",
+    "count": 2,
+    "probe": "yellow",
+    "label": "gpio_post"
   }
 ]
 ```
 
 - **Send step:** `{send, to, expect?, read_timeout?, line_ending?}` — `to` is the port path from `serial_connect`
 - **Delay step:** `{delay_ms}` — real `time.sleep()`, not tool-call round-trips
+- **Capture step:** `{capture: true, label?, device_index?}` — PNG saved to `/tmp/stm32-captures/`
+- **Memory write step:** `{mem_write: true, address | symbol + elf_path, value, probe, width?}`
+- **Memory read step:** `{mem_read: true, address | symbol + elf_path, probe, count?, width?, label?}`
+
+Memory step notes:
+
+- `probe` accepts ST-Link SN, probe nickname, or board nickname
+- `address` is hex (e.g. `"0x48000418"`); alternatively use `symbol` + `elf_path` to resolve by name
+- `width` is 8/16/32 bits, defaults to 32 (auto-detected from symbol size when using `symbol`)
+- Each memory op currently launches a fresh OpenOCD process (~tens of ms overhead per op), so inter-memory-op timing below ~50ms is approximate. Delays themselves are accurate.
 
 ### Parameters
 
-- **`on_failure`:** `"continue"` (default) runs all steps regardless. `"stop"` aborts on first failed assertion.
+- **`on_failure`:** `"continue"` (default) runs all steps regardless. `"stop"` aborts on first failure.
 - **`filter_responses`:** When `true`, `expect` patterns match only `>`-prefixed VCP response lines (ignores debug noise).
 
 ### Output
@@ -154,7 +173,13 @@ Step 3 [/dev/cu.usbmodem11402] SEND: GET_BLINK_STATE
   Response: >BLINK_STATE:BLINK
   Expect "BLINK": PASS
 
-Summary: 2/2 sends OK, 1/1 assertions PASS
+Step 4 [yellow] MEM_WRITE: Wrote 0x00000040 to 0x48000418
+
+Step 5 DELAY: 1000ms
+
+Step 6 [yellow] MEM_READ: gpio_post 0x48000400: 0xabffdfff 0x00000080
+
+Summary: 2/2 sends OK, 1/1 assertions PASS, 1/1 mem_writes OK, 1/1 mem_reads OK
 ```
 
 ## Live Memory Monitoring

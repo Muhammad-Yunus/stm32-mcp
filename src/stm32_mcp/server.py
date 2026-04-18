@@ -35,7 +35,7 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - serial_send          — Send data and read response
 - serial_read          — Read buffered serial data
 - serial_disconnect    — Close a serial connection
-- serial_sequence     — Run multi-step send/delay sequences in one call (timing-sensitive tests)
+- serial_sequence     — Run multi-step serial+SWD-memory sequences in one call (timing-sensitive tests)
 - stm32_read_memory    — Read memory by address or variable name (from ELF symbols)
 - stm32_write_memory   — Write memory by address or variable name
 - live_memory_start    — Start continuous background memory monitoring via SWD
@@ -82,14 +82,22 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - Use symbol param with elf_path to read/write by name instead of hex address
 - Width auto-detected from ELF symbol size when using symbol names
 
-## Serial Sequences
+## Hardware Sequences (serial_sequence)
 
-- serial_sequence runs multiple send/delay/capture steps in one tool call with real timing
-- Steps: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"} or {"delay_ms": 500} or {"capture": true, "label": "name"}
-- Optional per-step: "expect" (substring match), "read_timeout", "line_ending"
-- Capture steps save PNG images to /tmp/stm32-captures/ — use Read tool to view after
+- serial_sequence runs multiple send/delay/capture/mem_write/mem_read steps in one tool call with real timing
+- Serial step:     {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"}
+- Delay step:      {"delay_ms": 500}
+- Capture step:    {"capture": true, "label": "name"}   # saves PNG to /tmp/stm32-captures/
+- Mem write step:  {"mem_write": true, "address": "0x48000418", "value": "0x40", "probe": "yellow"}
+- Mem read step:   {"mem_read": true, "address": "0x48000400", "count": 2, "probe": "yellow", "label": "pre"}
+- Mem steps accept "symbol" + "elf_path" instead of "address" to read/write by name
+- "probe" accepts board nickname, probe nickname, or ST-Link SN
+- "width" is 8/16/32, defaults to 32 (auto-detected from symbol size)
+- Optional on send: "expect" (substring match), "read_timeout", "line_ending"
 - on_failure: "continue" (default) or "stop"
 - filter_responses: true to match expect only against >-prefixed VCP lines
+- Timing note: each mem op still launches OpenOCD (~tens of ms overhead), so
+  very tight memory-to-memory timing is approximate. Delays themselves are accurate.
 
 ## Live Memory Monitoring
 
