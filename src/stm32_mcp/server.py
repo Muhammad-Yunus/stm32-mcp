@@ -35,7 +35,7 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - serial_send          — Send data and read response
 - serial_read          — Read buffered serial data
 - serial_disconnect    — Close a serial connection
-- serial_sequence     — Run multi-step serial+SWD-memory sequences in one call (timing-sensitive tests)
+- serial_sequence     — Run multi-step send/delay sequences in one call (timing-sensitive tests)
 - stm32_read_memory    — Read memory by address or variable name (from ELF symbols)
 - stm32_write_memory   — Write memory by address or variable name
 - live_memory_start    — Start continuous background memory monitoring via SWD
@@ -53,12 +53,15 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 ## Rules
 
 - **ARM toolchain** (arm-none-eabi-nm, arm-none-eabi-gdb) must be on PATH.
-  These come from the CubeIDE-bundled toolchain directory added to ~/.zshrc.
+  These come from the CubeIDE-bundled toolchain directory added to your shell
+  profile (~/.zshrc on macOS, System Environment Variables on Windows).
   If symbol resolution or struct expansion fails with "not found", CubeIDE was
-  likely updated and the versioned plugin path in ~/.zshrc needs updating.
-  Look for the new path under: /Applications/STM32CubeIDE.app/Contents/Eclipse/
+  likely updated and the versioned plugin path needs updating.
+  macOS path example: /Applications/STM32CubeIDE.app/Contents/Eclipse/
   plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/
-  **Tell the user to update their PATH in ~/.zshrc if this happens.**
+  Windows path example: C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\
+  com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*\tools\bin\
+  **Tell the user to update their PATH if this happens.**
 - project_path must point to a directory containing .project and .cproject files
 - Never edit files in Debug/, Release/, Drivers/, or .cproject
 - New .c/.h files are automatically detected by the headless builder
@@ -82,22 +85,14 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - Use symbol param with elf_path to read/write by name instead of hex address
 - Width auto-detected from ELF symbol size when using symbol names
 
-## Hardware Sequences (serial_sequence)
+## Serial Sequences
 
-- serial_sequence runs multiple send/delay/capture/mem_write/mem_read steps in one tool call with real timing
-- Serial step:     {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"}
-- Delay step:      {"delay_ms": 500}
-- Capture step:    {"capture": true, "label": "name"}   # saves PNG to /tmp/stm32-captures/
-- Mem write step:  {"mem_write": true, "address": "0x48000418", "value": "0x40", "probe": "yellow"}
-- Mem read step:   {"mem_read": true, "address": "0x48000400", "count": 2, "probe": "yellow", "label": "pre"}
-- Mem steps accept "symbol" + "elf_path" instead of "address" to read/write by name
-- "probe" accepts board nickname, probe nickname, or ST-Link SN
-- "width" is 8/16/32, defaults to 32 (auto-detected from symbol size)
-- Optional on send: "expect" (substring match), "read_timeout", "line_ending"
+- serial_sequence runs multiple send/delay/capture steps in one tool call with real timing
+- Steps: {"send": "CMD", "to": "/dev/cu.usbmodemXXXX"} or {"delay_ms": 500} or {"capture": true, "label": "name"}
+- Optional per-step: "expect" (substring match), "read_timeout", "line_ending"
+- Capture steps save PNG images under the OS temp directory in stm32-mcp/captures/ — use Read tool to view after
 - on_failure: "continue" (default) or "stop"
 - filter_responses: true to match expect only against >-prefixed VCP lines
-- Timing note: each mem op still launches OpenOCD (~tens of ms overhead), so
-  very tight memory-to-memory timing is approximate. Delays themselves are accurate.
 
 ## Live Memory Monitoring
 
@@ -105,7 +100,7 @@ stm32-mcp: Build, flash, and communicate with STM32 hardware.
 - live_memory_read returns recent values from an in-memory ring buffer
 - live_memory_stop kills OpenOCD and returns session stats
 - Only one session per probe — stop before flashing or using stm32_read/write_memory
-- Output is JSONL at the specified path (default /tmp/live_memory_<id>.jsonl)
+- Output is JSONL at the specified path (default: OS temp dir/stm32-mcp/live_memory_<id>.jsonl)
 - **Struct auto-expansion**: Pass a struct variable name (e.g. `"blink"`) and all
   fields are automatically expanded with dotted names (e.g. `blink.state`,
   `blink.prev_output.changed`). Nested structs are recursively expanded.

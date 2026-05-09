@@ -7,7 +7,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from .board_map import resolve_probe_full
-from .toolchain import run_openocd
+from .toolchain import find_cubeprogrammer_cli, run_openocd
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -23,7 +23,7 @@ def _do_flash(
     target_cfg: str = "",
     chipid: int = 0,
 ) -> str:
-    """Synchronous flash via OpenOCD — runs in executor thread."""
+    """Synchronous flash via OpenOCD or CubeProgrammer CLI."""
     if chipid == -1:
         return "ERROR: Probe connected but no target MCU detected. Check board power and SWD connection."
     if not sn or not target_cfg:
@@ -32,6 +32,36 @@ def _do_flash(
     if not os.path.isfile(elf_path):
         return f"ERROR: File not found: {elf_path}"
 
+    if os.name == "nt":
+        # Windows: Use STM32_Programmer_CLI for reliable flashing
+        prog = find_cubeprogrammer_cli()
+        if not prog:
+            return "ERROR: STM32_Programmer_CLI not found. Ensure CubeIDE is installed."
+
+        # Build command: -c port=SWD sn=<sn> -d <file> [-v] [-rst]
+        cmd = [prog, "-c", f"port=SWD", f"sn={sn}", "-d", elf_path]
+        if verify:
+            cmd.append("-v")
+        if reset:
+            cmd.append("-rst")
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FLASH_TIMEOUT)
+            output = result.stdout + "\n" + result.stderr
+        except subprocess.TimeoutExpired:
+            return f"ERROR: Flash timed out after {FLASH_TIMEOUT}s."
+
+        if result.returncode != 0:
+            return f"Flash: FAILED\n  {output.strip()}"
+
+        parts = [f"ST-LINK: {sn}", "Flash: OK"]
+        if verify:
+            parts.append("Verify: OK")
+        if reset:
+            parts.append("Reset: OK")
+        return "\n".join(parts)
+
+    # Linux/macOS: Use existing OpenOCD flow
     # Build OpenOCD program command
     # "program <file> [verify] [reset] exit"
     prog_parts = [f"program {{{elf_path}}}"]
@@ -98,11 +128,44 @@ def _do_flash(
 
 
 def _do_board_info(sn: str = "", target_cfg: str = "", chipid: int = 0) -> str:
-    """Synchronous board info via OpenOCD — runs in executor thread."""
+    """Synchronous board info via OpenOCD or CubeProgrammer CLI."""
     if chipid == -1:
         return "ERROR: Probe connected but no target MCU detected. Check board power and SWD connection."
     if not sn or not target_cfg:
         return "ERROR: Could not resolve probe. Use stm32_list_probes to see connected boards."
+
+    if os.name == "nt":
+        prog = find_cubeprogrammer_cli()
+        if not prog:
+            return "ERROR: STM32_Programmer_CLI not found. Ensure CubeIDE is installed."
+
+        cmd = [prog, "-c", "port=SWD", f"sn={sn}", "-r8", "0x08000000", "1"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=INFO_TIMEOUT)
+            output = result.stdout + "\n" + result.stderr
+        except subprocess.TimeoutExpired:
+            return f"ERROR: Board info timed out after {INFO_TIMEOUT}s."
+
+        if result.returncode != 0:
+            return f"ERROR: {output.strip()}"
+
+        info = [f"ST-LINK SN: {sn}"]
+        fw_match = re.search(r"ST-LINK\s+SN\s*:\s*(\S+)", output, re.IGNORECASE)
+        if fw_match:
+            info.append(f"ST-LINK: {fw_match.group(1)}")
+        voltage = re.search(r"Voltage\s*:\s*([\d.]+)V", output, re.IGNORECASE)
+        if voltage:
+            info.append(f"Voltage: {voltage.group(1)}V")
+
+        from .board_map import get_board_nickname_for_probe_sn, get_probe_nickname
+        probe_nick = get_probe_nickname(sn)
+        board_nick = get_board_nickname_for_probe_sn(sn)
+        if board_nick:
+            info.append(f'Board: "{board_nick}"')
+        if probe_nick:
+            info.append(f'Probe: "{probe_nick}"')
+
+        return "\n".join(info)
 
     try:
         output = run_openocd(sn, target_cfg, ["init"], timeout=INFO_TIMEOUT, chipid=chipid)

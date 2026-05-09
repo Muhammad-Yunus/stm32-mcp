@@ -2,18 +2,27 @@
 
 ARM TOOLCHAIN (arm-none-eabi-nm, arm-none-eabi-gdb, etc.):
   These are found via PATH. The CubeIDE-bundled toolchain directory must be on
-  PATH in ~/.zshrc. If tools are not found, CubeIDE was probably updated and
-  the versioned plugin path changed. Fix: update the PATH export in ~/.zshrc to
-  match the new plugin directory under:
-    /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/
-        com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/
+  PATH (set in ~/.zshrc on macOS/Linux, or System Environment Variables on Windows).
+  If tools are not found after a CubeIDE update, the versioned plugin path may have
+  changed. Update your PATH to point to the new plugin directory:
+    macOS:   /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/
+                 com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/
+    Windows: C:\\ST\\STM32CubeIDE_*\\STM32CubeIDE\\plugins\\
+                 com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*\\tools\\bin\\
+
+FLASHING (Windows vs macOS/Linux):
+  On Windows, flashing uses STM32_Programmer_CLI (bundled with CubeIDE).
+  On macOS/Linux, flashing uses OpenOCD.
+  Memory read/write/live-monitoring always uses OpenOCD on all platforms.
 """
 
 import glob
+import logging
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -21,10 +30,41 @@ from pathlib import Path
 _cubeide_path: str | None = None
 _openocd_path: str | None = None
 _st_info_path: str | None = None
+_cubeprogrammer_cli_path: str | None = None
 _cubeide_searched = False
 _openocd_searched = False
 _st_info_searched = False
+_cubeprogrammer_cli_searched = False
 
+
+# ---------------------------------------------------------------------------
+# Cross-platform directory helpers
+# ---------------------------------------------------------------------------
+
+def get_temp_dir(subdir: str = "") -> str:
+    """Return a cross-platform temporary directory for stm32-mcp runtime files.
+
+    On all platforms, uses the system temp directory (via tempfile.gettempdir())
+    with a 'stm32-mcp' subdirectory.  This replaces hardcoded '/tmp' paths.
+
+    Args:
+        subdir: Optional subdirectory under the base temp dir.
+
+    Returns:
+        Absolute path to the directory (created if it doesn't exist).
+    """
+    base = os.path.join(tempfile.gettempdir(), "stm32-mcp")
+    if subdir:
+        path = os.path.join(base, subdir)
+    else:
+        path = base
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Tool discovery
+# ---------------------------------------------------------------------------
 
 def find_cubeide() -> str | None:
     """Find STM32CubeIDE executable. Caches result after first lookup."""
@@ -37,12 +77,24 @@ def find_cubeide() -> str | None:
         "/Applications/STM32CubeIDE.app/Contents/MacOS/stm32cubeide",
         # Linux
         "/opt/st/stm32cubeide_*/stm32cubeide",
+        # Windows
+        "C:/ST/STM32CubeIDE_*/STM32CubeIDE/stm32cubeidec.exe",
+        "C:/ST/STM32CubeIDE_*/STM32CubeIDE/stm32cubeide.exe",
+        "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeIDE/stm32cubeidec.exe",
     ]
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            _cubeide_path = sorted(matches)[-1]  # latest version
+    # Check PATH first (Windows/Linux/macOS)
+    for exe in ["stm32cubeidec", "stm32cubeidec.exe", "stm32cubeide", "stm32cubeide.exe"]:
+        found = shutil.which(exe)
+        if found:
+            _cubeide_path = found
             break
+
+    if not _cubeide_path:
+        for pattern in patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                _cubeide_path = sorted(matches)[-1]  # latest version
+                break
 
     _cubeide_searched = True
     return _cubeide_path
@@ -55,14 +107,29 @@ def find_openocd() -> str | None:
         return _openocd_path
 
     candidates = [
+        # macOS/Linux
         "/opt/homebrew/bin/openocd",
         "/usr/local/bin/openocd",
         "/usr/bin/openocd",
+        # Windows common locations
+        "C:/Program Files/OpenOCD/bin/openocd.exe",
+        "C:/ST/STM32CubeIDE/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.debug.openocd_*/tools/bin/openocd.exe",
+        "C:/ST/STM32CubeIDE_*/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.debug.openocd_*/tools/bin/openocd.exe",
     ]
-    for path in candidates:
-        if os.path.isfile(path):
-            _openocd_path = path
-            break
+    # Check PATH first
+    found = shutil.which("openocd") or shutil.which("openocd.exe")
+    if found:
+        _openocd_path = found
+    else:
+        for path in candidates:
+            if "*" in path:
+                matches = glob.glob(path)
+                if matches:
+                    _openocd_path = sorted(matches)[-1]
+                    break
+            elif os.path.isfile(path):
+                _openocd_path = path
+                break
 
     _openocd_searched = True
     return _openocd_path
@@ -75,17 +142,54 @@ def find_st_info() -> str | None:
         return _st_info_path
 
     candidates = [
+        # macOS/Linux
         "/opt/homebrew/bin/st-info",
         "/usr/local/bin/st-info",
         "/usr/bin/st-info",
+        # Windows (common install via choco / manual)
+        "C:/Program Files/stlink/bin/st-info.exe",
+        "C:/Program Files (x86)/stlink/bin/st-info.exe",
     ]
-    for path in candidates:
-        if os.path.isfile(path):
-            _st_info_path = path
-            break
+    # Check PATH first
+    found = shutil.which("st-info") or shutil.which("st-info.exe")
+    if found:
+        _st_info_path = found
+    else:
+        for path in candidates:
+            if os.path.isfile(path):
+                _st_info_path = path
+                break
 
     _st_info_searched = True
     return _st_info_path
+
+
+def find_cubeprogrammer_cli() -> str | None:
+    """Find STM32_Programmer_CLI executable. Caches result after first lookup."""
+    global _cubeprogrammer_cli_path, _cubeprogrammer_cli_searched
+    if _cubeprogrammer_cli_searched:
+        return _cubeprogrammer_cli_path
+
+    # Check PATH first
+    found = shutil.which("STM32_Programmer_CLI.exe") or shutil.which("STM32_Programmer_CLI")
+    if found:
+        _cubeprogrammer_cli_path = found
+    else:
+        # Fallback: glob under CubeIDE plugins (versioned path) — works for any ST install root
+        patterns = [
+            "C:/ST/STM32CubeIDE_*/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.*/tools/bin/STM32_Programmer_CLI.exe",
+            # STM32CubeProgrammer standalone install
+            "C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe",
+            "C:/Program Files (x86)/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe",
+        ]
+        for pattern in patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                _cubeprogrammer_cli_path = sorted(matches)[-1]
+                break
+
+    _cubeprogrammer_cli_searched = True
+    return _cubeprogrammer_cli_path
 
 
 def find_nm() -> str | None:
@@ -184,27 +288,44 @@ def run_openocd(
     timeout: int = 15,
     chipid: int = 0,
 ) -> str:
-    """Run OpenOCD one-shot with the given commands. Returns combined output.
-
-    Builds a command like:
-        openocd -f interface/stlink.cfg -c "adapter serial <sn>"
-                -c "transport select hla_swd"
-                [-c "set WORKAREASIZE <size>"]
-                -f target/<target_cfg>
-                -c "<cmd1>" -c "<cmd2>" ... -c "shutdown"
-    """
+    """Run OpenOCD one-shot with the given commands. Returns combined output."""
     openocd = find_openocd()
     if not openocd:
-        raise FileNotFoundError("OpenOCD not found. Install via: brew install open-ocd")
+        raise FileNotFoundError(
+            "OpenOCD not found. "
+            "macOS: brew install open-ocd  |  "
+            "Windows: add CubeIDE OpenOCD plugin to PATH or install OpenOCD separately  |  "
+            "Linux: sudo apt install openocd"
+        )
 
-    cmd = [
-        openocd,
+    cmd = [openocd]
+    openocd_cwd = None
+
+    if os.name == "nt":
+        try:
+            exe_path = Path(openocd).resolve()
+            plugins_dir = next((p for p in exe_path.parents if p.name.lower() == "plugins"), None)
+            if plugins_dir:
+                debug_plugins = sorted(plugins_dir.glob("com.st.stm32cube.ide.mcu.debug.openocd_*"))
+                if debug_plugins:
+                    st_scripts = debug_plugins[-1] / "resources" / "openocd" / "st_scripts"
+                    if st_scripts.is_dir():
+                        openocd_cwd = str(st_scripts)
+        except Exception as e:
+            logging.debug(f"Failed to derive OpenOCD st_scripts path: {e}")
+
+        if not openocd_cwd:
+            st_scripts_pattern = "C:/ST/STM32CubeIDE_*/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.debug.openocd_*/resources/openocd/st_scripts"
+            matches = sorted(glob.glob(st_scripts_pattern))
+            if matches:
+                openocd_cwd = matches[-1]
+
+    cmd.extend([
         "-f", "interface/stlink.cfg",
         "-c", f"adapter serial {sn}",
         "-c", "transport select hla_swd",
-    ]
+    ])
 
-    # Override work area for chips with limited SRAM (must come before target cfg)
     wa = openocd_workarea(chipid) if chipid else None
     if wa is not None:
         cmd.extend(["-c", f"set WORKAREASIZE 0x{wa:X}"])
@@ -214,8 +335,11 @@ def run_openocd(
         cmd.extend(["-c", c])
     cmd.extend(["-c", "shutdown"])
 
+    logging.debug(f"OpenOCD CWD: {openocd_cwd}")
+    logging.debug("OpenOCD command: %s", " ".join(cmd))
+
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout,
+        cmd, capture_output=True, text=True, timeout=timeout, cwd=openocd_cwd
     )
     return result.stdout + "\n" + result.stderr
 

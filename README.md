@@ -2,7 +2,7 @@
 
 MCP server that lets Claude Code build, flash, and communicate with STM32 hardware.
 
-stm32-mcp is pretty specific to how I tend to approach hardware development, but it is likely useful to others, too! It could be massaged to fit lots of workflows, but this is laser focused on mine (stlink-v3 mini, VCP on that header, STM32 microcontroller). 
+stm32-mcp is pretty specific to how I tend to approach hardware development, but it is likely useful to others, too! It could be massaged to fit lots of workflows, but this is laser focused on mine (stlink-v3 mini, VCP on that header, STM32 microcontroller).
 
 You can do things like:
 
@@ -10,7 +10,7 @@ You can do things like:
 >
 > **claude:** two unnamed probes connected to two unnamed PCBs
 >
-> **me:** k ask them who they are and give them a nickname based on their response 
+> **me:** k ask them who they are and give them a nickname based on their response
 >
 > **claude:** got it, do you want to nickname the probes too? your boards are 'doorbell A' and 'synthesizer B'
 >
@@ -22,42 +22,110 @@ You can do things like:
 >
 > **claude:** *thinking...* done, synth declined. plenty of fish in the sea, doorbell!
 
-[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets AI assistants like Claude use external tools. This server gives Claude the ability to compile your firmware, flash it to a board, talk to it over serial, and read memory via SWD. It is flexible and conversational. 
+[MCP (Model Context Protocol)](https://modelcontextprotocol.io) is an open standard that lets AI assistants like Claude use external tools. This server gives Claude the ability to compile your firmware, flash it to a board, talk to it over serial, and read memory via SWD. It is flexible and conversational.
 
 > [!WARNING]
 > This server gives an AI direct access to your compiler, debug probe, and serial ports. It can flash firmware, overwrite memory, and send arbitrary data to your hardware. This is powerful and useful, but it is not a sandbox. Know what's connected before you let it rip.
 
+---
+
 ## Prerequisites
 
-- **STM32CubeIDE** installed at `/Applications/STM32CubeIDE.app` (macOS) or `/opt/st/stm32cubeide_*` (Linux)
+### Windows 11 (primary target for this fork)
+
+| Requirement | Notes |
+|---|---|
+| **STM32CubeIDE** | Install via [st.com](https://www.st.com/en/development-tools/stm32cubeide.html). Default path: `C:\ST\STM32CubeIDE_*\`. Includes the ARM toolchain, OpenOCD plugin, and STM32_Programmer_CLI. |
+| **ST-Link USB driver** | Installed automatically with CubeIDE. If your probe is not recognized, run the driver installer from `C:\ST\STM32CubeIDE_*\STM32CubeIDE\drivers\`. |
+| **ARM toolchain on PATH** | Add the GNU toolchain `bin\` directory to your **System Environment Variables → Path**. Find it at: `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*\tools\bin\` |
+| **Python 3.10+** | Download from [python.org](https://www.python.org/downloads/). Check **"Add Python to PATH"** during install. |
+| **ST-Link probe** | ST-Link V2/V3 connected via USB (for flash / board info / SWD debug). |
+| **Serial port** | ST-Link VCP or USB-UART adapter (for serial communication). |
+
+> **Flash tool on Windows:** This fork uses **STM32_Programmer_CLI** (bundled with CubeIDE) for flashing. OpenOCD is still used for memory read/write and live memory monitoring.
+
+> **STM32_Programmer_CLI search order:**
+> 1. `STM32_Programmer_CLI.exe` on your PATH
+> 2. `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.*\tools\bin\`
+> 3. `C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\`
+> 4. `C:\Program Files (x86)\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\`
+
+> **OpenOCD search order on Windows:**
+> 1. `openocd.exe` on your PATH
+> 2. `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.debug.openocd_*\tools\bin\openocd.exe`
+
+### macOS
+
+- **STM32CubeIDE** installed at `/Applications/STM32CubeIDE.app` (macOS)
 - **Python 3.10+**
-- **OpenOCD** (`brew install open-ocd`) — for flash, memory read/write, and live monitoring
-- **open-source stlink tools** (`brew install stlink`) — for probe enumeration
-- **ST-Link** connected via USB (for flash/board info)
-- **Serial port** available (ST-Link VCP or USB-UART adapter)
+- **OpenOCD** — `brew install open-ocd` (for flash, memory read/write, and live monitoring)
+- **open-source stlink tools** — `brew install stlink` (for probe enumeration)
+- ARM toolchain on PATH via `~/.zshrc` (from CubeIDE plugin directory)
+
+### Linux
+
+- **STM32CubeIDE** installed at `/opt/st/stm32cubeide_*`
+- **Python 3.10+**
+- **OpenOCD** — `sudo apt install openocd`
+- **stlink tools** — `sudo apt install stlink-tools`
+
+---
 
 ## Installation
 
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/Muhammad-Yunus/stm32-mcp.git
+cd stm32-mcp
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+```
+
+### macOS / Linux (bash)
+
 ```bash
-git clone https://github.com/shieldyguy/stm32-mcp.git
+git clone https://github.com/Muhammad-Yunus/stm32-mcp.git
 cd stm32-mcp
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
 
+---
+
 ## Register with Claude Code
 
 ### Option A: CLI
 
+**Windows (PowerShell):**
+```powershell
+claude mcp add stm32 -- C:\path\to\stm32-mcp\.venv\Scripts\python.exe -m stm32_mcp.server
+```
+
+**macOS / Linux:**
 ```bash
 claude mcp add stm32 -- /path/to/stm32-mcp/.venv/bin/python -m stm32_mcp.server
 ```
 
 ### Option B: Project config
 
-Add to your project's `.claude/settings.json` or `.claude.json`:
+Add to your project's `.claude/settings.json`:
 
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "stm32": {
+      "command": "C:\\path\\to\\stm32-mcp\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "stm32_mcp.server"]
+    }
+  }
+}
+```
+
+**macOS / Linux:**
 ```json
 {
   "mcpServers": {
@@ -69,6 +137,8 @@ Add to your project's `.claude/settings.json` or `.claude.json`:
 }
 ```
 
+---
+
 ## Available Tools
 
 ### Build & Flash
@@ -79,6 +149,10 @@ Add to your project's `.claude/settings.json` or `.claude.json`:
 | `stm32_flash`           | Flash .elf/.bin/.hex to board via ST-Link SWD          |
 | `stm32_build_and_flash` | Build + flash in one step (the 90% case)               |
 | `stm32_board_info`      | Read ST-Link/MCU info (device ID, flash size, voltage) |
+
+> **Flash backend by platform:**
+> - **Windows** → `STM32_Programmer_CLI.exe` (bundled with CubeIDE)
+> - **macOS / Linux** → OpenOCD
 
 ### Multi-Board Management
 
@@ -110,6 +184,8 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
 | `live_memory_read`   | Read recent entries from a live memory session             |
 | `live_memory_stop`   | Stop a live memory session                                 |
 
+---
+
 ## Hardware Sequences
 
 `serial_sequence` runs multiple steps — serial send, delay, webcam capture, and SWD memory read/write — in a single tool call with real timing between steps. No tool-call overhead between steps; delays use a real `time.sleep()` in the executor thread. This is critical for timing-sensitive hardware test sequences and for bit-banging registers over SWD (e.g. blinking a GPIO on a board with no firmware).
@@ -118,11 +194,11 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
 
 ```json
 [
-  { "send": "SIM_LEFT", "to": "/dev/cu.usbmodem11202" },
+  { "send": "SIM_LEFT", "to": "COM3" },
   { "delay_ms": 500 },
   {
     "send": "GET_BLINK_STATE",
-    "to": "/dev/cu.usbmodem11402",
+    "to": "COM4",
     "expect": "BLINK"
   },
   { "capture": true, "label": "post_brake" },
@@ -143,9 +219,11 @@ Board nicknames follow the physical MCU (persist across probe swaps). Probe nick
 ]
 ```
 
+> **Note:** On Windows, serial port identifiers use `COM` notation (e.g. `COM3`). On macOS/Linux, use the full device path (e.g. `/dev/cu.usbmodem11202`). Use `serial_list_ports` to find your port.
+
 - **Send step:** `{send, to, expect?, read_timeout?, line_ending?}` — `to` is the port path from `serial_connect`
 - **Delay step:** `{delay_ms}` — real `time.sleep()`, not tool-call round-trips
-- **Capture step:** `{capture: true, label?, device_index?}` — PNG saved to `/tmp/stm32-captures/`
+- **Capture step:** `{capture: true, label?, device_index?}` — PNG saved to the OS temp directory under `stm32-mcp/captures/`
 - **Memory write step:** `{mem_write: true, address | symbol + elf_path, value, probe, width?}`
 - **Memory read step:** `{mem_read: true, address | symbol + elf_path, probe, count?, width?, label?}`
 
@@ -164,12 +242,12 @@ Memory step notes:
 ### Output
 
 ```
-Step 1 [/dev/cu.usbmodem11202] SEND: SIM_LEFT
+Step 1 [COM3] SEND: SIM_LEFT
   Response: >OK:SIM_LEFT
 
 Step 2 DELAY: 500ms
 
-Step 3 [/dev/cu.usbmodem11402] SEND: GET_BLINK_STATE
+Step 3 [COM4] SEND: GET_BLINK_STATE
   Response: >BLINK_STATE:BLINK
   Expect "BLINK": PASS
 
@@ -182,6 +260,8 @@ Step 6 [yellow] MEM_READ: gpio_post 0x48000400: 0xabffdfff 0x00000080
 Summary: 2/2 sends OK, 1/1 assertions PASS, 1/1 mem_writes OK, 1/1 mem_reads OK
 ```
 
+---
+
 ## Live Memory Monitoring
 
 Monitor firmware variables in real time via SWD, without modifying firmware or using serial. OpenOCD runs as a persistent subprocess and polls variables over its built-in TCL socket.
@@ -191,7 +271,7 @@ Monitor firmware variables in real time via SWD, without modifying firmware or u
 ```
 live_memory_start(
     variables='["blink", "ts"]',       # symbol names from ELF
-    elf_path="/path/to/firmware.elf",
+    elf_path="C:/path/to/firmware.elf",
     probe="taillight",                  # board/probe nickname
     interval_ms=500                     # min 250ms
 )
@@ -231,6 +311,20 @@ Returns stats: duration, read count, error count, output file path.
 - **Stop before flashing** — `live_memory` holds the SWD connection; `stm32_flash` and `stm32_read/write_memory` will fail if a session is active
 - **TCL port 6666** — OpenOCD's default. Stop other OpenOCD instances first if there's a conflict
 
+---
+
+## Runtime Files
+
+All runtime files (build workspace, logs, live memory JSONL, captures) are written under the **OS temp directory** in a `stm32-mcp/` subdirectory:
+
+| Platform | Base temp path |
+|---|---|
+| Windows | `%TEMP%\stm32-mcp\` (usually `C:\Users\<you>\AppData\Local\Temp\stm32-mcp\`) |
+| macOS | `/var/folders/.../stm32-mcp/` |
+| Linux | `/tmp/stm32-mcp/` |
+
+---
+
 ## Serial Defaults
 
 - **Baud rate:** 115200
@@ -238,10 +332,19 @@ Returns stats: duration, read count, error count, output file path.
 - **Read polling:** 50ms inter-byte sleep, 200ms silence break
 - **Buffer limits:** 4096 bytes max read
 
+---
+
 ## Development
 
 ### MCP Inspector
 
+**Windows:**
+```powershell
+.venv\Scripts\activate
+mcp dev src/stm32_mcp/server.py
+```
+
+**macOS / Linux:**
 ```bash
 source .venv/bin/activate
 mcp dev src/stm32_mcp/server.py

@@ -358,6 +358,19 @@ def resolve_probe_full(probe: str) -> tuple[str, str, int]:
     """
     sn = resolve_probe(probe)
 
+    # If no probe was specified, auto-select when exactly one probe is connected.
+    if not sn:
+        probes = _enumerate_probes()
+        if len(probes) == 1:
+            only = probes[0]
+            sn = only["stlink_sn"]
+            chipid = only.get("chipid", 0)
+            if chipid == 0:
+                return sn, "", -1
+            target_cfg = openocd_target_cfg(chipid) or ""
+            return sn, target_cfg, chipid
+        return "", "", 0
+
     # Try to get target_cfg from cache
     cached = _probe_cache.get(sn)
     if cached and cached.get("chipid"):
@@ -366,21 +379,24 @@ def resolve_probe_full(probe: str) -> tuple[str, str, int]:
         return sn, target_cfg, chipid
 
     # Cache miss — enumerate probes and retry
-    if sn:
-        probes = _enumerate_probes()
-        cached = _probe_cache.get(sn)
-        if cached and cached.get("chipid"):
-            chipid = cached["chipid"]
-            target_cfg = openocd_target_cfg(chipid) or ""
-            return sn, target_cfg, chipid
+    probes = _enumerate_probes()
+    cached = _probe_cache.get(sn)
+    if cached and cached.get("chipid"):
+        chipid = cached["chipid"]
+        target_cfg = openocd_target_cfg(chipid) or ""
+        return sn, target_cfg, chipid
 
-        # Probe SN was resolved (e.g. from nickname) but enumeration couldn't
-        # determine the target config. Check if the probe is physically present
-        # but has no target MCU (chipid 0x000).
-        for p in probes:
-            if p["stlink_sn"] == sn and p["chipid"] == 0:
-                # Probe is connected but no target MCU detected
-                return sn, "", -1  # sentinel: probe found, no target
+    # Explicit-SN fallback from fresh enumeration even if cache is cold
+    for p in probes:
+        if p["stlink_sn"] != sn:
+            continue
+        chipid = p.get("chipid", 0)
+        if chipid == 0:
+            return sn, "", -1
+        target_cfg = openocd_target_cfg(chipid) or ""
+        if target_cfg:
+            return sn, target_cfg, chipid
+        return sn, "", chipid
 
     return sn, "", 0
 

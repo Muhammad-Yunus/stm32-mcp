@@ -5,47 +5,48 @@ import glob
 import os
 import re
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from .toolchain import find_cubeide, get_project_name, validate_project_path
+from .toolchain import find_cubeide, get_project_name, get_temp_dir, validate_project_path
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
 # Track which projects have been imported to skip -import on subsequent builds
 _imported_projects: dict[str, bool] = {}
 
-WORKSPACE_PATH = "/tmp/stm32-mcp-workspace"
+WORKSPACE_PATH = os.path.join(get_temp_dir(), "workspace")
 WORKSPACE_LOCK = os.path.join(WORKSPACE_PATH, ".metadata", ".lock")
 
 BUILD_TIMEOUT = 180  # seconds
+
+# Maximum age (seconds) before a lock file is considered stale and removed.
+_LOCK_STALE_SECONDS = 600  # 10 minutes — well above the longest normal build
 
 
 def _check_and_clear_workspace_lock() -> str | None:
     """Check workspace lock. Clear if stale. Returns error message or None.
 
-    Our temp workspace (/tmp/stm32-mcp-workspace) is never used by CubeIDE GUI,
-    so we only need to check if another MCP headless build is using it — not
-    whether CubeIDE is running in general (it uses its own workspace).
+    The temp workspace is never used by CubeIDE GUI, so we only need to check
+    if another MCP headless build is using it.  On all platforms we use a
+    portable approach: check lock-file age rather than relying on pgrep.
     """
     if not os.path.isfile(WORKSPACE_LOCK):
         return None
 
-    # Check if another headless build is using OUR temp workspace specifically
+    # If the lock is younger than the stale threshold, assume a build is active
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", f"stm32-mcp-workspace"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0 and result.stdout.strip():
+        age = time.time() - os.path.getmtime(WORKSPACE_LOCK)
+        if age < _LOCK_STALE_SECONDS:
             return (
-                "Another MCP headless build is already running. "
-                "Wait for it to finish."
+                "Another MCP headless build is already running "
+                f"(lock age {int(age)}s). Wait for it to finish."
             )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except OSError:
         pass
 
-    # No process using our workspace — stale lock, remove it
+    # Lock is old — stale, remove it
     try:
         os.remove(WORKSPACE_LOCK)
     except OSError:
@@ -53,7 +54,7 @@ def _check_and_clear_workspace_lock() -> str | None:
     return None
 
 
-LOG_DIR = "/tmp/stm32-mcp-logs"
+LOG_DIR = os.path.join(get_temp_dir(), "logs")
 
 # Patterns for diagnostics and linker errors
 _DIAGNOSTIC_RE = re.compile(r":\d+:\d+:\s*(fatal\s+error|error|warning|note):")

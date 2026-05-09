@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from .board_map import resolve_probe_full
 from .debug_tools import _resolve_symbol, _width_from_size, _ocd_read_cmd
 from .struct_layout import expand_struct
-from .toolchain import find_openocd, openocd_workarea, openocd_target_cfg
+from .toolchain import find_openocd, get_temp_dir, openocd_workarea, openocd_target_cfg
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -70,7 +70,12 @@ def _start_openocd(sn: str, target_cfg: str, chipid: int) -> tuple[subprocess.Po
     """Start OpenOCD as a persistent subprocess and connect to its TCL port."""
     openocd = find_openocd()
     if not openocd:
-        raise FileNotFoundError("OpenOCD not found. Install via: brew install open-ocd")
+        raise FileNotFoundError(
+            "OpenOCD not found. "
+            "macOS: brew install open-ocd  |  "
+            "Windows: add CubeIDE OpenOCD plugin to PATH or install OpenOCD separately  |  "
+            "Linux: sudo apt install openocd"
+        )
 
     cmd = [
         openocd,
@@ -400,7 +405,7 @@ async def live_memory_start(
         elf_path: Path to .elf file for symbol resolution.
         probe: Board nickname, probe nickname, or ST-Link SN.
         interval_ms: Polling interval in milliseconds (minimum 250).
-        output_path: JSONL output file path. Default: /tmp/live_memory_<id>.jsonl
+        output_path: JSONL output file path. Default: OS temp dir/stm32-mcp/live_memory_<id>.jsonl
 
     Returns:
         Session ID, output path, and resolved variable list.
@@ -421,7 +426,7 @@ async def live_memory_start(
 
     session_id = uuid.uuid4().hex[:8]
     if not output_path:
-        output_path = f"/tmp/live_memory_{session_id}.jsonl"
+        output_path = os.path.join(get_temp_dir(), f"live_memory_{session_id}.jsonl")
 
     session = LiveMemorySession(
         session_id=session_id,
