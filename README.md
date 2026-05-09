@@ -33,26 +33,67 @@ You can do things like:
 
 ### Windows 11 (primary target for this fork)
 
-| Requirement | Notes |
-|---|---|
-| **STM32CubeIDE** | Install via [st.com](https://www.st.com/en/development-tools/stm32cubeide.html). Default path: `C:\ST\STM32CubeIDE_*\`. Includes the ARM toolchain, OpenOCD plugin, and STM32_Programmer_CLI. |
-| **ST-Link USB driver** | Installed automatically with CubeIDE. If your probe is not recognized, run the driver installer from `C:\ST\STM32CubeIDE_*\STM32CubeIDE\drivers\`. |
-| **ARM toolchain on PATH** | Add the GNU toolchain `bin\` directory to your **System Environment Variables → Path**. Find it at: `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*\tools\bin\` |
-| **Python 3.10+** | Download from [python.org](https://www.python.org/downloads/). Check **"Add Python to PATH"** during install. |
-| **ST-Link probe** | ST-Link V2/V3 connected via USB (for flash / board info / SWD debug). |
-| **Serial port** | ST-Link VCP or USB-UART adapter (for serial communication). |
+### What to install first
 
-> **Flash tool on Windows:** This fork uses **STM32_Programmer_CLI** (bundled with CubeIDE) for flashing. OpenOCD is still used for memory read/write and live memory monitoring.
+1. **Install STM32CubeIDE** from [st.com](https://www.st.com/en/development-tools/stm32cubeide.html)
+   - Default install root is typically `C:\ST\STM32CubeIDE_*\`
+   - This includes:
+     - ARM GNU toolchain (`arm-none-eabi-*`)
+     - STM32_Programmer_CLI
+     - OpenOCD
+2. **Install Python 3.10+** from [python.org](https://www.python.org/downloads/)
+   - During install, check **"Add Python to PATH"**
+3. **Connect ST-Link probe** (V2/V3)
+   - If Windows does not detect it, run ST driver installer from:
+     `C:\ST\STM32CubeIDE_*\STM32CubeIDE\drivers\`
 
-> **STM32_Programmer_CLI search order:**
-> 1. `STM32_Programmer_CLI.exe` on your PATH
-> 2. `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.*\tools\bin\`
-> 3. `C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\`
-> 4. `C:\Program Files (x86)\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\`
+### Required PATH setup on Windows
 
-> **OpenOCD search order on Windows:**
-> 1. `openocd.exe` on your PATH
-> 2. `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.debug.openocd_*\tools\bin\openocd.exe`
+You should add these directories to **System Environment Variables → Path**:
+
+- ARM toolchain bin:
+  `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*\tools\bin\`
+- CubeProgrammer CLI bin (recommended):
+  `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.*\tools\bin\`
+- OpenOCD bin (recommended for memory/debug tools):
+  `C:\ST\STM32CubeIDE_*\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.openocd.*\tools\bin\`
+
+#### How to add PATH entries (Windows 11)
+
+1. Press **Win** and search for **Environment Variables**
+2. Open **Edit the system environment variables**
+3. Click **Environment Variables...**
+4. Under **System variables**, select **Path**, click **Edit**
+5. Click **New** and paste each directory above
+6. Click **OK** on all dialogs
+7. **Close and reopen PowerShell/Claude Code** so the new PATH is picked up
+
+#### Verify PATH tools in PowerShell
+
+```powershell
+where arm-none-eabi-gdb
+where arm-none-eabi-nm
+where STM32_Programmer_CLI
+where openocd
+```
+
+If a command is not found, recheck the plugin path version and PATH entries.
+
+> **Flash tool on Windows:** this fork uses **STM32_Programmer_CLI** for flashing.
+> OpenOCD is still used for memory read/write and live memory monitoring.
+
+> **Tool lookup order used by stm32-mcp (Windows):**
+> - `STM32_Programmer_CLI`: PATH first, then CubeIDE plugin path, then standalone CubeProgrammer install path
+> - `openocd`: PATH first, then CubeIDE plugin path
+> - `st-info`: PATH first, then common stlink install paths
+
+### Quick preflight checklist (before installing MCP)
+
+- [ ] `where arm-none-eabi-gdb` returns a valid path
+- [ ] `where STM32_Programmer_CLI` returns a valid path
+- [ ] `where openocd` returns a valid path
+- [ ] ST-Link is connected and recognized in Device Manager
+- [ ] You can open your CubeIDE project and build manually once
 
 ### macOS
 
@@ -71,7 +112,7 @@ You can do things like:
 
 ---
 
-## Installation
+## Install stm32-mcp
 
 ### Windows (PowerShell)
 
@@ -80,6 +121,24 @@ git clone https://github.com/Muhammad-Yunus/stm32-mcp.git
 cd stm32-mcp
 python -m venv .venv
 .venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e .
+```
+
+### Verify the MCP package install
+
+```powershell
+python -c "import stm32_mcp; print('stm32_mcp import OK')"
+```
+
+### macOS / Linux (bash)
+
+```bash
+git clone https://github.com/Muhammad-Yunus/stm32-mcp.git
+cd stm32-mcp
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e .
 ```
 
@@ -90,6 +149,7 @@ git clone https://github.com/Muhammad-Yunus/stm32-mcp.git
 cd stm32-mcp
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e .
 ```
 
